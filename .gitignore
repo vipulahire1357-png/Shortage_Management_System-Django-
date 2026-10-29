@@ -1,0 +1,79 @@
+# Python caches, test output, and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+.conda/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# Editors and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and temporary/backup files
+logs/*
+!logs/.gitkeep
+!logs/README.md
+*.log
+*.tmp
+*.temp
+*.bak
+*.backup
+*.backup_*
+*.old
+
+# SQLite databases and sidecar files
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+*.sqlite-*
+
+# Runtime input/output data; keep placeholders and documentation
+data/raw/*
+!data/raw/README.md
+data/processed/*
+!data/processed/.gitkeep
+
+# Operational files inside per-project and global SAP data directories
+projects/**/*.xls*
+projects/**/*.htm*
+projects/**/*.csv
+projects/**/*.txt
+projects/**/*.tsv
+projects/**/*.pdf
+global/**/*.xls*
+global/**/*.htm*
+global/**/*.csv
+global/**/*.txt
+global/**/*.tsv
+global/**/*.pdf
+
+# Generated registers and vendor workbooks; keep folder structure and docs
+Material Shortage Registers/**/*.xls*
+Vendor Registers/**/*.xls*
+Vendor Date Registers/**/*.xls*
+Submitted Final Date/**/*.xls*
+~$*.xls*

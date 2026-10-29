@@ -1,0 +1,2 @@
+-- Reserved for reviewed, explicit schema definitions.
+-- Do not drop or recreate existing tables as part of initialization.

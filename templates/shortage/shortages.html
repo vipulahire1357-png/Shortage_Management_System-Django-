@@ -1,0 +1,125 @@
+{% extends 'shortage/base.html' %}
+{% load shortage_tags %}
+{% block title %}Shortage Management · ABB{% endblock %}
+{% block heading %}Shortage Management{% endblock %}
+{% block content %}
+<section class="card project-selection-panel" data-collapsible-panel data-panel-key="project-selection">
+  <div class="card-head">
+    <div>
+      <h2>Project Selection</h2>
+      <p>Choose a project with a saved register to view its shortage records.</p>
+    </div>
+    <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="project-selection-content" aria-label="Collapse Project Selection" title="Collapse section">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg>
+    </button>
+  </div>
+  <div class="panel-content" id="project-selection-content">
+    <form method="get" class="project-select-form">
+      <label for="shortage-project">Project
+        <select id="shortage-project" name="project_id">
+          <option value="" {% if not selected_project %}selected{% endif %}>All Projects</option>
+          {% for project in projects %}<option value="{{ project }}" {% if selected_project == project %}selected{% endif %}>{{ project }}</option>{% endfor %}
+        </select>
+      </label>
+      <button class="button primary" type="submit">Show Project</button>
+    </form>
+  </div>
+</section>
+
+<section class="card filter-panel" data-collapsible-panel data-panel-key="shortage-filters">
+  <div class="card-head">
+    <div><h2>Filters</h2><p>Refine the selected project’s shortage records.</p></div>
+    <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="shortage-filter-content" aria-label="Collapse Filters" title="Collapse section">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg>
+    </button>
+  </div>
+  <div class="panel-content" id="shortage-filter-content">
+    <form method="get" class="filters shortage-filters">
+      {% if selected_project %}<input type="hidden" name="project_id" value="{{ selected_project }}">{% endif %}
+      <label for="filter-material-ref">Material Ref Code
+        <span class="filter-combo"><input id="filter-material-ref" type="text" name="material_ref_code" data-options="material-ref-options" value="{{ request.GET.material_ref_code|default:'All' }}" placeholder="All — type or select" autocomplete="off"><button class="filter-combo-toggle" type="button" aria-label="Show Material Ref Code options" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg></button><span class="filter-combo-menu" role="listbox" hidden></span></span>
+        <datalist id="material-ref-options"><option value="All"></option>{% for value in filters.material_ref_code %}<option value="{{ value }}"></option>{% endfor %}</datalist>
+      </label>
+      <label for="filter-wbs">WBS Element
+        <span class="filter-combo"><input id="filter-wbs" type="text" name="wbs_element" data-options="wbs-options" value="{{ request.GET.wbs_element|default:'All' }}" placeholder="All — type or select" autocomplete="off"><button class="filter-combo-toggle" type="button" aria-label="Show WBS Element options" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg></button><span class="filter-combo-menu" role="listbox" hidden></span></span>
+        <datalist id="wbs-options"><option value="All"></option>{% for value in filters.wbs_element %}<option value="{{ value }}"></option>{% endfor %}</datalist>
+      </label>
+      <label for="filter-material-code">Material Code
+        <span class="filter-combo"><input id="filter-material-code" type="text" name="material_code" data-options="material-code-options" value="{{ request.GET.material_code|default:'All' }}" placeholder="All — type or select" autocomplete="off"><button class="filter-combo-toggle" type="button" aria-label="Show Material Code options" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg></button><span class="filter-combo-menu" role="listbox" hidden></span></span>
+        <datalist id="material-code-options"><option value="All"></option>{% for value in filters.material_code %}<option value="{{ value }}"></option>{% endfor %}</datalist>
+      </label>
+      <label for="filter-scope">Scope
+        <span class="filter-combo"><input id="filter-scope" type="text" name="scope" data-options="scope-options" value="{{ request.GET.scope|default:'All' }}" placeholder="All — type or select" autocomplete="off"><button class="filter-combo-toggle" type="button" aria-label="Show Scope options" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg></button><span class="filter-combo-menu" role="listbox" hidden></span></span>
+        <datalist id="scope-options"><option value="All"></option>{% for value in filters.scope %}<option value="{{ value }}"></option>{% endfor %}</datalist>
+      </label>
+      <div class="filter-actions">
+        <button class="button primary" type="submit">Apply filters</button>
+        <a class="button light" href="{% url 'shortages' %}{% if selected_project %}?project_id={{ selected_project|urlencode }}{% endif %}">Reset</a>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="card shortage-card">
+  <div class="card-head">
+    <div>
+      <h2>Material Shortage Register</h2>
+      <p>{{ total }} matching records</p>
+    </div>
+    <div class="actions">
+      {% if register_project_id %}
+      <form method="post" action="{% url 'open_project_register' register_project_id %}" class="excel-open-form">
+        {% csrf_token %}
+        <button class="button excel-button" type="submit" aria-label="Open the saved register for project {{ register_project_id }} in Excel">
+        <svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path>
+          <path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path>
+        </svg>
+        Open Excel
+        </button>
+      </form>
+      {% else %}
+      <button class="button excel-button" type="button" disabled title="Select a project above first">Open Excel</button>
+      {% endif %}
+    </div>
+  </div>
+  {% if not selected_project %}<p class="open-excel-hint">Select a project above to open its saved register.</p>{% endif %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr>{% for col in columns %}<th>{{ col }}</th>{% endfor %}<th>Remarks</th></tr></thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          {% for col in columns %}<td>{% if col in numeric_columns %}{{ row|get_item:col|floatformat:2 }}{% else %}{{ row|get_item:col|default_if_none:'' }}{% endif %}</td>{% endfor %}
+          <td>
+            <button type="button" class="remarks-edit-trigger" data-project="{{ row.project_id }}" data-ref="{{ row|get_item:'Material Ref Code' }}" data-wbs="{{ row|get_item:'WBS Element' }}" data-material="{{ row|get_item:'Material Code' }}" data-remarks="{{ row|get_item:'Remarks'|default_if_none:'' }}" aria-label="Edit remarks for {{ row|get_item:'Material Code' }}">{{ row|get_item:'Remarks'|default_if_none:''|default:'Click to add remarks' }}</button>
+          </td>
+        </tr>
+        {% empty %}<tr><td colspan="16" class="empty">No records found. Add reports under Input &amp; Imports and process a project.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    Page {{ rows.number }} of {{ rows.paginator.num_pages }} · {{ total }} rows
+    {% if rows.has_previous %}<a href="?{{ request.GET.urlencode }}&amp;page={{ rows.previous_page_number }}">Previous</a>{% endif %}
+    {% if rows.has_next %}<a href="?{{ request.GET.urlencode }}&amp;page={{ rows.next_page_number }}">Next</a>{% endif %}
+  </div>
+</section>
+
+<dialog class="remarks-dialog" id="remarks-dialog" aria-labelledby="remarks-dialog-title">
+  <form method="post" action="{% url 'save_remarks' %}" class="remarks-dialog-form">
+    {% csrf_token %}
+    <h2 id="remarks-dialog-title">Edit Remarks</h2>
+    <input type="hidden" name="project_id">
+    <input type="hidden" name="material_ref_code">
+    <input type="hidden" name="wbs_element">
+    <input type="hidden" name="material_code">
+    <label for="remarks-dialog-input">Remarks</label>
+    <textarea id="remarks-dialog-input" name="remarks" rows="6" maxlength="4000"></textarea>
+    <div class="remarks-dialog-actions">
+      <button class="button light" type="button" data-close-remarks>Cancel</button>
+      <button class="button primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}

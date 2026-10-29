@@ -1,0 +1,52 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ABB Shortage Management{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{% static 'shortage/abb-logo.svg' %}?v=2">
+  <link rel="stylesheet" href="{% static 'shortage/app.css' %}?v=19">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" id="workspace-sidebar" aria-label="Workspace navigation">
+      <div class="sidebar-heading">
+        <a class="brand" href="{% url 'shortages' %}" aria-label="ABB Shortage and Vendor Management home">
+          <img class="brand-logo" src="{% static 'shortage/abb-logo.svg' %}?v=2" alt="ABB" width="66" height="36">
+          <span class="brand-name">Shortage<br>&amp; Vendor Management</span>
+        </a>
+        <button class="sidebar-toggle" type="button" aria-controls="workspace-sidebar" aria-expanded="true" aria-label="Collapse workspace sidebar" title="Collapse sidebar">
+          <span aria-hidden="true">‹</span>
+        </button>
+      </div>
+      <div class="nav-label">WORKSPACE</div>
+      <a class="nav-link" href="{% url 'input' %}" title="Input &amp; Imports" aria-label="Input &amp; Imports">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17z"></path><path d="M12 16V11m-2 2 2-2 2 2"></path></svg>
+        <span class="nav-full">Input &amp; Imports</span>
+      </a>
+      <a class="nav-link" href="{% url 'shortages' %}" title="Shortage Management" aria-label="Shortage Management">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"></rect><path d="M9 4.5h6M8.5 10h7M8.5 13.5h7M8.5 17h4"></path></svg>
+        <span class="nav-full">Shortage Management</span>
+      </a>
+      <a class="nav-link" href="{% url 'vendor_track' %}" title="Vendor Track" aria-label="Vendor Track">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 5.5h11v12h-11zM14.5 9h4l2 3v5h-6z"></path><circle cx="7.5" cy="18" r="1.8"></circle><circle cx="17.5" cy="18" r="1.8"></circle><path d="M16 12h4"></path></svg>
+        <span class="nav-full">Vendor Track</span>
+      </a>
+      <a class="nav-link" href="{% url 'vendor_import' %}" title="Vendor Response Import" aria-label="Vendor Response Import">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14v5h16v-5M12 3v11m-4-4 4 4 4-4"></path><path d="M7 7V4h10v3"></path></svg>
+        <span class="nav-full">Vendor Response Import</span>
+      </a>
+      <div class="sidebar-note">Local application<br>Data stays on this computer.</div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><div class="eyebrow">ABB OPERATIONS</div><h1>{% block heading %}Shortage Management{% endblock %}</h1></div>
+        <span class="local-badge"><span aria-hidden="true">●</span> LOCAL</span>
+      </header>
+      {% if messages %}<section class="notices">{% for message in messages %}<div class="notice {{ message.tags }}">{{ message|linebreaksbr }}</div>{% endfor %}</section>{% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="{% static 'shortage/app.js' %}?v=9" defer></script>
+</body>
+</html>
