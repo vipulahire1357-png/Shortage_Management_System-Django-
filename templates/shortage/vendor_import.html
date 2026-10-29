@@ -4,11 +4,11 @@
 {% block content %}
 <section class="card vendor-folder-panel">
   <div class="card-head">
-    <div><h2>Vendor Date Registers</h2><p>Select a vendor folder to view its register, open it in Excel, or edit Proposed Dates.</p></div>
+    <div><h2>Vendor Date Registers</h2><p class="card-desc">Select a vendor folder to view its register, open it in Excel, or edit Proposed Dates.</p></div>
   </div>
   <div class="vendor-folder-controls">
     <form method="get" class="project-select-form">
-      <label for="vendor-folder-select">Vendor Folder
+      <label for="vendor-folder-select" class="form-label">Vendor Folder
         <select id="vendor-folder-select" name="vendor_folder" required>
           <option value="">Select a vendor folder</option>
           {% for folder in folders %}<option value="{{ folder }}" {% if selected_folder == folder %}selected{% endif %}>{{ folder }}</option>{% endfor %}
@@ -19,38 +19,56 @@
     {% if workbook_exists %}
     <form method="post" action="{% url 'open_vendor_register' %}" class="excel-open-form">
       {% csrf_token %}<input type="hidden" name="vendor_folder" value="{{ selected_folder }}">
-      <button class="button excel-button" type="submit"><svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path><path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path></svg>Open Excel</button>
+      <button class="button excel-button" type="submit">
+        <svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path><path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path></svg>
+        Open Excel
+      </button>
     </form>
     {% else %}<button class="button excel-button" type="button" disabled title="Show a vendor folder first">Open Excel</button>{% endif %}
   </div>
-  {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+  {% if error %}<p class="notice error mt-3">{{ error }}</p>{% endif %}
 </section>
 
 {% if selected_folder and workbook_exists %}
 <section class="card shortage-card">
   <div class="card-head">
-    <div><h2>{{ selected_folder }}</h2><p>{{ rows|length }} vendor register row(s). Valid Vendor Dates will be applied to matching Material Shortage Registers.</p></div>
+    <div><h2>{{ selected_folder }}</h2><p class="card-desc">{{ rows|length }} vendor register row{{ rows|length|pluralize }}. Valid Vendor Dates will be applied to matching Material Shortage Registers.</p></div>
     <div class="vendor-import-actions">
       <form id="apply-vendor-dates-form" method="post" action="{% url 'apply_vendor_dates' %}">
         {% csrf_token %}<input type="hidden" name="vendor_folder" value="{{ selected_folder }}">
-        <button class="button vendor-import-update-button" type="submit" {% if not accepted_count %}disabled title="This folder has no valid Vendor Date entries"{% endif %}>Update Material Registers</button>
+        <button class="button vendor-import-update-button" type="submit" {% if not accepted_count %}disabled title="This folder has no valid Vendor Date entries"{% endif %}>
+          <svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true" style="stroke:currentColor"><path d="M7 10l3 3 5-5"></path></svg>
+          Update Material Registers
+        </button>
       </form>
       <form method="post" action="{% url 'open_second_vendor_date_request' %}">
         {% csrf_token %}<input type="hidden" name="vendor_folder" value="{{ selected_folder }}">
-        <button class="button vendor-import-request-button" type="submit" {% if not has_vendor_date_request %}disabled title="No vendor date request exists for this vendor"{% endif %}><svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path><path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path></svg><span>Vendor Date Request</span></button>
+        <button class="button vendor-import-request-button" type="submit" {% if not has_vendor_date_request %}disabled title="No more request copies are available"{% endif %}>
+          <svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path><path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path></svg>
+          <span>Vendor Date Request{% if request_copy_name %} ({{ request_copy_name }}){% endif %}</span>
+        </button>
       </form>
     </div>
   </div>
-  <div class="table-wrap">
+  <div class="table-wrap mt-3">
     <table class="vendor-response-table">
       <thead><tr><th>Vendor</th><th>WBS Element</th><th>Material Code</th><th>Description</th><th>Quantity</th><th>Vendor Date</th><th>Proposed Date</th><th>Final Date</th></tr></thead>
       <tbody>
         {% for row in rows %}
         <tr>
-          <td>{{ row.vendor }}</td><td>{{ row.wbs_element }}</td><td>{{ row.material_code }}</td><td>{{ row.description }}</td><td>{{ row.quantity|default_if_none:'' }}</td>
-          <td>{{ row.vendor_date }}</td>
-          <td><div class="proposed-date-cell"><span>{{ row.proposed_date }}</span><button type="button" class="button light proposed-date-edit" data-row-number="{{ row.row_number }}" data-proposed-date="{{ row.proposed_date }}">Edit</button></div></td>
-          <td>{{ row.final_date }}</td>
+          <td>{{ row.vendor }}</td>
+          <td><span class="text-mono">{{ row.wbs_element }}</span></td>
+          <td><span class="text-mono">{{ row.material_code }}</span></td>
+          <td style="white-space:normal;max-width:240px;">{{ row.description }}</td>
+          <td class="num font-tabular">{{ row.quantity|default_if_none:'' }}</td>
+          <td>{% if row.vendor_date_valid %}<span class="badge badge-green">{{ row.vendor_date }}</span>{% else %}{{ row.vendor_date|default_if_none:'—' }}{% endif %}</td>
+          <td>
+            <div class="proposed-date-cell">
+              <span>{{ row.proposed_date|default_if_none:'—' }}</span>
+              <button type="button" class="button proposed-date-edit" data-row-number="{{ row.row_number }}" data-proposed-date="{{ row.proposed_date }}">Edit</button>
+            </div>
+          </td>
+          <td>{{ row.final_date|default_if_none:'—' }}</td>
         </tr>
         {% empty %}<tr><td colspan="8" class="empty">No data rows were found in this vendor register.</td></tr>{% endfor %}
       </tbody>
@@ -66,7 +84,10 @@
     <input type="hidden" name="row_number">
     <label for="proposed-date-input">Proposed Date</label>
     <input id="proposed-date-input" type="text" name="proposed_date" placeholder="YYYY-MM-DD" maxlength="40" autocomplete="off">
-    <div class="remarks-dialog-actions"><button class="button light" type="button" data-close-proposed-date>Cancel</button><button class="button primary" type="submit">Save</button></div>
+    <div class="remarks-dialog-actions">
+      <button class="button" type="button" data-close-proposed-date>Cancel</button>
+      <button class="button primary" type="submit">Save</button>
+    </div>
   </form>
 </dialog>
 {% endif %}

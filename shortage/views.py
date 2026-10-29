@@ -155,6 +155,76 @@ def _shortage_query(request, project_id=None):
 
 
 @require_GET
+def dashboard(request):
+    """Operational dashboard with KPI metrics derived from the actual database."""
+    projects = _available_register_projects()
+    total_materials = shortage_count = fulfilled_count = 0
+    vendor_track_count = missing_vendor_count = 0
+    top_shortages = []
+    project_count = len(projects)
+    register_count = len(projects)
+
+    conn = _conn()
+    if conn is not None:
+        try:
+            table = _output_table(conn)
+            if table:
+                total_materials = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                shortage_count = conn.execute(
+                    f'SELECT COUNT(*) FROM {table} WHERE "Net Shortage" > 0'
+                ).fetchone()[0]
+                fulfilled_count = total_materials - shortage_count
+                missing_vendor_count = conn.execute(
+                    f'SELECT COUNT(*) FROM {table} WHERE ("Net Shortage" > 0) AND (TRIM(COALESCE("Vendor Detail",""))="")'
+                ).fetchone()[0]
+
+                # Top 10 shortage materials
+                top_rows = conn.execute(
+                    f'SELECT "Material Code", "Material Description", "WBS Element", '
+                    f'"ZPP7 Quantity", "Project Stock Quantity", "Net Shortage", '
+                    f'"Vendor Detail", "Scope" '
+                    f'FROM {table} WHERE "Net Shortage" > 0 '
+                    f'ORDER BY "Net Shortage" DESC LIMIT 10'
+                ).fetchall()
+                top_shortages = [
+                    {
+                        "material_code": r[0],
+                        "description": r[1],
+                        "wbs_element": r[2],
+                        "zpp7_qty": r[3] or 0,
+                        "project_stock": r[4] or 0,
+                        "net_shortage": r[5] or 0,
+                        "vendor": r[6],
+                        "scope": r[7],
+                    }
+                    for r in top_rows
+                ]
+
+            # Vendor track count
+            vt_tables = {r[0].casefold() for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "vendor_track" in vt_tables:
+                vendor_track_count = conn.execute(
+                    "SELECT COUNT(*) FROM vendor_track"
+                ).fetchone()[0]
+        finally:
+            conn.close()
+
+    return render(request, "shortage/dashboard.html", {
+        "total_materials": total_materials,
+        "shortage_count": shortage_count,
+        "fulfilled_count": fulfilled_count,
+        "vendor_track_count": vendor_track_count,
+        "missing_vendor_count": missing_vendor_count,
+        "register_count": register_count,
+        "project_count": project_count,
+        "top_shortages": top_shortages,
+        "projects": projects,
+    })
+
+
+@require_GET
 def shortages(request):
     projects = _available_register_projects()
     selected_project = request.GET.get("project_id", "").strip()
@@ -367,38 +437,18 @@ def _latest_vendor_date_request(vendor):
     return max(candidates, key=lambda path: path.stat().st_mtime_ns, default=None)
 
 
-def _latest_second_vendor_date_request(vendor):
-    """Find the newest Second export inside the selected vendor's request folder."""
-    if not vendor:
-        return None
-    from services.vendor_request_export import sanitize_vendor_folder_name
-
-    root = settings.VENDOR_REGISTERS_DIR.resolve()
-    directory = (root / sanitize_vendor_folder_name(vendor) / "Date Request").resolve()
-    try:
-        directory.relative_to(root)
-    except ValueError:
-        return None
-    if not directory.is_dir():
-        return None
-    candidates = []
-    for path in directory.iterdir():
-        if not path.is_file() or path.suffix.casefold() not in {".xlsx", ".xlsm"}:
-            continue
-        if not re.fullmatch(r"Second(?:_v\d+)?", path.stem, flags=re.IGNORECASE):
-            continue
-        target = path.resolve()
-        try:
-            target.relative_to(root)
-        except ValueError:
-            continue
-        candidates.append(target)
-    return max(candidates, key=lambda path: path.stat().st_mtime_ns, default=None)
-
-
-def _vendor_date_request_for_folder(vendor):
-    """Prefer a Second request; fall back to another saved request for this vendor."""
-    return _latest_second_vendor_date_request(vendor) or _latest_vendor_date_request(vendor)
+def _next_vendor_request_copy_name(folder):
+    """Return the next missing sequential request copy name, through Fifth."""
+    folder = Path(folder)
+    existing = {
+        re.sub(r"_v\d+$", "", path.stem, flags=re.IGNORECASE).casefold()
+        for path in folder.iterdir()
+        if path.is_file() and path.suffix.casefold() in {".xlsx", ".xlsm"}
+    } if folder.is_dir() else set()
+    for name in ("Second", "Third", "Fourth", "Fifth"):
+        if name.casefold() not in existing:
+            return name
+    return None
 
 
 @require_POST
@@ -438,27 +488,30 @@ def open_vendor_date_request(request):
 @require_POST
 def open_second_vendor_date_request(request):
     from django.contrib import messages
+    from services.vendor_request_export import sanitize_vendor_folder_name
+    from services.vendor_response_service import resolve_vendor_workbook
 
     vendor_folder = request.POST.get("vendor_folder", "").strip()
-    if request.META.get("REMOTE_ADDR") not in {"127.0.0.1", "::1"}:
-        messages.error(request, "Opening vendor date requests is available from this computer only.")
-        return _vendor_response_redirect(vendor_folder)
-    if not hasattr(os, "startfile"):
-        messages.error(request, "Direct Excel opening is available when the local app is running on Windows.")
-        return _vendor_response_redirect(vendor_folder)
-    target = _vendor_date_request_for_folder(vendor_folder)
-    if target is None:
-        messages.error(request, f"No vendor date request was found for {vendor_folder or 'the selected vendor'}.")
-        return _vendor_response_redirect(vendor_folder)
     try:
-        from services.vendor_request_export import enforce_vendor_date_fields_editable
-
-        enforce_vendor_date_fields_editable(target)
-        os.startfile(str(target))
+        source = resolve_vendor_workbook(settings.VENDOR_DATE_REGISTERS_DIR, vendor_folder)
+        root = settings.VENDOR_REGISTERS_DIR.resolve()
+        company_dir = (root / sanitize_vendor_folder_name(vendor_folder)).resolve()
+        company_dir.relative_to(root)
+        destination_dir = company_dir / "Date Request"
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination_dir.resolve().relative_to(root)
+        copy_name = _next_vendor_request_copy_name(destination_dir)
+        if copy_name is None:
+            raise FileExistsError("Second through Fifth request copies already exist for this vendor.")
+        target = destination_dir / f"{copy_name}{source.suffix.casefold()}"
+        target.resolve().relative_to(root)
+        if target.exists():
+            raise FileExistsError(f"{target.name} already exists; it was not overwritten.")
+        shutil.copy2(source, target)
     except Exception as exc:
-        messages.error(request, f"Could not open {target.name}: {exc}")
+        messages.error(request, f"Could not save the vendor date request copy: {exc}")
     else:
-        messages.success(request, f"Opened vendor date request: {target.name}.")
+        messages.success(request, f"Saved vendor date request copy to {target.parent.name}/{target.name}.")
     return _vendor_response_redirect(vendor_folder)
 
 
@@ -626,14 +679,27 @@ def vendor_import(request):
             except Exception as exc:
                 error = str(exc)
     accepted_count = sum(1 for row in rows if row["vendor_date_valid"])
-    has_vendor_date_request = bool(_vendor_date_request_for_folder(selected_folder)) if workbook_exists else False
+    request_copy_name = None
+    if workbook_exists:
+        try:
+            from services.vendor_request_export import sanitize_vendor_folder_name
+            destination_dir = (
+                Path(settings.VENDOR_REGISTERS_DIR)
+                / sanitize_vendor_folder_name(selected_folder)
+                / "Date Request"
+            )
+            destination_dir.resolve().relative_to(settings.VENDOR_REGISTERS_DIR.resolve())
+            request_copy_name = _next_vendor_request_copy_name(destination_dir)
+        except (ValueError, OSError):
+            pass
     return render(request, "shortage/vendor_import.html", {
         "folders": folders,
         "selected_folder": selected_folder,
         "rows": rows,
         "workbook_exists": workbook_exists,
         "accepted_count": accepted_count,
-        "has_vendor_date_request": has_vendor_date_request,
+        "has_vendor_date_request": workbook_exists and bool(request_copy_name),
+        "request_copy_name": request_copy_name,
     })
 
 

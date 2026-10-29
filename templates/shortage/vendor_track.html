@@ -5,7 +5,7 @@
 {% block content %}
 <section class="card project-selection-panel" data-collapsible-panel data-panel-key="vendor-project-selection">
   <div class="card-head">
-    <div><h2>Project Selection</h2><p>Select processed registers to rebuild vendor tracking rows.</p></div>
+    <div><h2>Project Selection</h2><p class="card-desc">Select processed registers to rebuild vendor tracking rows.</p></div>
     <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="vendor-project-selection-content" aria-label="Collapse Project Selection" title="Collapse section">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg>
     </button>
@@ -15,7 +15,7 @@
       {% csrf_token %}
       <fieldset class="project-rebuild-fieldset">
         <legend>Select processed Material Shortage Registers to rebuild vendor tracking rows</legend>
-        <div class="check-grid">{% for project in projects %}<label><input type="checkbox" name="project_ids" value="{{ project }}"> {{ project }}</label>{% empty %}<p>No project registers found. Process a project first.</p>{% endfor %}</div>
+        <div class="check-grid">{% for project in projects %}<label><input type="checkbox" name="project_ids" value="{{ project }}"> {{ project }}</label>{% empty %}<p class="text-muted">No project registers found. Process a project first.</p>{% endfor %}</div>
       </fieldset>
       <button class="button primary" type="submit">Rebuild vendor tracking rows</button>
     </form>
@@ -24,7 +24,7 @@
 
 <section class="card filter-panel" data-collapsible-panel data-panel-key="vendor-filters">
   <div class="card-head">
-    <div><h2>Filters</h2><p>Refine the selected vendor tracking records.</p></div>
+    <div><h2>Filters</h2><p class="card-desc">Refine the selected vendor tracking records.</p></div>
     <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="vendor-filter-content" aria-label="Collapse Filters" title="Collapse section">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg>
     </button>
@@ -32,17 +32,17 @@
   <div class="panel-content" id="vendor-filter-content">
     <form class="filters shortage-filters vendor-filters" method="get">
       {% if selected_project %}<input type="hidden" name="project_id" value="{{ selected_project }}">{% endif %}
-      <label for="vendor-filter-vendor">Vendor
+      <label for="vendor-filter-vendor" class="form-label">Vendor
         <span class="filter-combo"><input id="vendor-filter-vendor" type="text" name="vendor" data-options="vendor-options" value="{{ selected_vendor|default:'All' }}" placeholder="All — type or select" autocomplete="off"><button class="filter-combo-toggle" type="button" aria-label="Show Vendor options" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg></button><span class="filter-combo-menu" role="listbox" hidden></span></span>
         <datalist id="vendor-options"><option value="All"></option>{% for value in vendors %}<option value="{{ value }}"></option>{% endfor %}</datalist>
       </label>
-      <label for="vendor-filter-wbs">WBS Element
+      <label for="vendor-filter-wbs" class="form-label">WBS Element
         <span class="filter-combo"><input id="vendor-filter-wbs" type="text" name="wbs_element" data-options="vendor-wbs-options" value="{{ selected_wbs|default:'All' }}" placeholder="All — type or select" autocomplete="off"><button class="filter-combo-toggle" type="button" aria-label="Show WBS Element options" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg></button><span class="filter-combo-menu" role="listbox" hidden></span></span>
         <datalist id="vendor-wbs-options"><option value="All"></option>{% for value in wbs_options %}<option value="{{ value }}"></option>{% endfor %}</datalist>
       </label>
       <div class="filter-actions">
         <button class="button primary" type="submit">Apply filters</button>
-        <a class="button light" href="{% url 'vendor_track' %}{% if selected_project %}?project_id={{ selected_project|urlencode }}{% endif %}">Reset</a>
+        <a class="button" href="{% url 'vendor_track' %}{% if selected_project %}?project_id={{ selected_project|urlencode }}{% endif %}">Reset</a>
       </div>
     </form>
   </div>
@@ -50,23 +50,47 @@
 
 <section class="card shortage-card">
   <div class="card-head">
-    <div><h2>Vendor Track Records</h2><p>{{ records.paginator.count }} matching records</p></div>
+    <div><h2>Vendor Track Records</h2><p class="card-desc">{{ records.paginator.count }} matching record{{ records.paginator.count|pluralize }}</p></div>
     <div class="actions">
       <form method="post" action="{% url 'export_vendor_request' %}" class="vendor-date-export-form">
         {% csrf_token %}
         <input type="hidden" name="vendor" id="vendor-date-export-name" value="">
         {% if selected_project %}<input type="hidden" name="project_ids" value="{{ selected_project }}">{% endif %}
         {% if selected_wbs in wbs_options %}<input type="hidden" name="wbs_elements" value="{{ selected_wbs }}">{% endif %}
-        <button class="button excel-button vendor-date-export-button" type="submit" disabled title="Select one vendor in the filters first"><svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path><path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path></svg>Export vendor date request</button>
+        <button class="button excel-button vendor-date-export-button" type="submit" disabled title="Select one vendor in the filters first">
+          <svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path><path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path></svg>
+          Export date request
+        </button>
       </form>
-      <form method="post" action="{% url 'open_vendor_date_request' %}" class="excel-open-form">{% csrf_token %}<input type="hidden" name="vendor" id="open-vendor-date-request-name" value="{{ selected_vendor }}">{% if selected_project %}<input type="hidden" name="project_id" value="{{ selected_project }}">{% endif %}{% if selected_wbs in wbs_options %}<input type="hidden" name="wbs_element" value="{{ selected_wbs }}">{% endif %}<button class="button excel-button vendor-date-open-button" type="submit" disabled title="Select one vendor in the filters first" aria-label="Open the latest exported vendor date request in Excel"><svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path><path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path></svg>Open Excel</button></form>
+      <form method="post" action="{% url 'open_vendor_date_request' %}" class="excel-open-form">{% csrf_token %}<input type="hidden" name="vendor" id="open-vendor-date-request-name" value="{{ selected_vendor }}">{% if selected_project %}<input type="hidden" name="project_id" value="{{ selected_project }}">{% endif %}{% if selected_wbs in wbs_options %}<input type="hidden" name="wbs_element" value="{{ selected_wbs }}">{% endif %}<button class="button excel-button" type="submit" disabled title="Select one vendor in the filters first" aria-label="Open the latest exported vendor date request in Excel">
+        <svg class="excel-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5.25 2.5h6.5l3 3v12h-9.5z"></path><path d="M11.75 2.75v3h2.75M7.5 9h5.5M7.5 11.75h5.5M7.5 14.5h5.5M10.25 9v5.5"></path></svg>
+        Open Excel</button></form>
     </div>
   </div>
   {% if vendor_is_selected and not has_vendor_date_request %}<p class="open-excel-hint">Export a vendor date request first to open it in Excel.</p>{% endif %}
-  <div class="table-wrap"><table><thead><tr><th>Vendor</th><th>WBS</th><th>Material</th><th>Description</th><th>Quantity</th><th>Vendor Date</th><th>Proposed Date</th><th>Final Date</th></tr></thead><tbody>
-    {% for row in records %}<tr><td>{{ row|get_item:'Vendor Detail' }}</td><td>{{ row|get_item:'WBS Element' }}</td><td>{{ row|get_item:'Material Code' }}</td><td>{{ row|get_item:'Description' }}</td><td>{{ row|get_item:'Quantity' }}</td><td>{{ row|get_item:'Vendor Date' }}</td><td>{{ row|get_item:'Proposed Date' }}</td><td>{{ row|get_item:'Final Date' }}</td></tr>
-    {% empty %}<tr><td colspan="8" class="empty">No vendor rows yet.</td></tr>{% endfor %}
-  </tbody></table></div>
-  <div class="pagination">Page {{ records.number }} of {{ records.paginator.num_pages }} · {{ records.paginator.count }} rows{% if records.has_previous %}<a href="?{{ request.GET.urlencode }}&amp;page={{ records.previous_page_number }}">Previous</a>{% endif %}{% if records.has_next %}<a href="?{{ request.GET.urlencode }}&amp;page={{ records.next_page_number }}">Next</a>{% endif %}</div>
+  <div class="table-wrap mt-3">
+    <table>
+      <thead><tr><th>Vendor</th><th>WBS</th><th>Material</th><th>Description</th><th>Quantity</th><th>Vendor Date</th><th>Proposed Date</th><th>Final Date</th></tr></thead>
+      <tbody>
+        {% for row in records %}
+        <tr>
+          <td>{{ row|get_item:'Vendor Detail' }}</td>
+          <td><span class="text-mono">{{ row|get_item:'WBS Element' }}</span></td>
+          <td><span class="text-mono">{{ row|get_item:'Material Code' }}</span></td>
+          <td style="white-space:normal;max-width:240px;">{{ row|get_item:'Description' }}</td>
+          <td class="num font-tabular">{{ row|get_item:'Quantity' }}</td>
+          <td>{{ row|get_item:'Vendor Date'|default_if_none:'—' }}</td>
+          <td>{{ row|get_item:'Proposed Date'|default_if_none:'—' }}</td>
+          <td>{{ row|get_item:'Final Date'|default_if_none:'—' }}</td>
+        </tr>
+        {% empty %}<tr><td colspan="8" class="empty">No vendor rows yet. Process project registers and rebuild vendor tracking above.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    Page {{ records.number }} of {{ records.paginator.num_pages }} · {{ records.paginator.count }} rows
+    {% if records.has_previous %}<a href="?{{ request.GET.urlencode }}&amp;page={{ records.previous_page_number }}">← Previous</a>{% endif %}
+    {% if records.has_next %}<a href="?{{ request.GET.urlencode }}&amp;page={{ records.next_page_number }}">Next →</a>{% endif %}
+  </div>
 </section>
 {% endblock %}

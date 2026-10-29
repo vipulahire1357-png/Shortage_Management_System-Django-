@@ -1,0 +1,124 @@
+{% extends 'shortage/base.html' %}
+{% block title %}Dashboard · ABB Shortage & Vendor Management{% endblock %}
+{% block heading %}Dashboard{% endblock %}
+{% block content %}
+
+<!-- KPI Metrics -->
+<section class="metrics" aria-label="Key performance indicators">
+  <div class="metric-card">
+    <span class="metric-label"><span class="metric-dot red"></span>Total Materials</span>
+    <span class="metric-value" data-animate-count>{{ total_materials }}</span>
+    <span class="metric-sub">Across {{ project_count }} project{{ project_count|pluralize }}</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label"><span class="metric-dot red"></span>Materials with Shortage</span>
+    <span class="metric-value" data-animate-count>{{ shortage_count }}</span>
+    <span class="metric-sub">Net Shortage &gt; 0</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label"><span class="metric-dot green"></span>Materials Fulfilled</span>
+    <span class="metric-value" data-animate-count>{{ fulfilled_count }}</span>
+    <span class="metric-sub">Adequate stock available</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label"><span class="metric-dot blue"></span>Vendor Tracking</span>
+    <span class="metric-value" data-animate-count>{{ vendor_track_count }}</span>
+    <span class="metric-sub">Active vendor track rows</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label"><span class="metric-dot amber"></span>Missing Vendor Info</span>
+    <span class="metric-value" data-animate-count>{{ missing_vendor_count }}</span>
+    <span class="metric-sub">Shortage items without vendor</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label"><span class="metric-dot gray"></span>Processed Registers</span>
+    <span class="metric-value" data-animate-count>{{ register_count }}</span>
+    <span class="metric-sub">Saved project register{{ register_count|pluralize }}</span>
+  </div>
+</section>
+
+<!-- Quick Actions -->
+<section class="quick-actions" aria-label="Quick actions">
+  <a class="quick-action" href="{% url 'input' %}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17z"></path><path d="M12 16V11m-2 2 2-2 2 2"></path></svg>
+    Upload Reports
+  </a>
+  <a class="quick-action" href="{% url 'shortages' %}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"></rect><path d="M9 4.5h6M8.5 10h7M8.5 13.5h7M8.5 17h4"></path></svg>
+    View Shortages
+  </a>
+  <a class="quick-action" href="{% url 'vendor_track' %}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 5.5h11v12h-11zM14.5 9h4l2 3v5h-6z"></path><circle cx="7.5" cy="18" r="1.8"></circle><circle cx="17.5" cy="18" r="1.8"></circle></svg>
+    Vendor Track
+  </a>
+  <a class="quick-action" href="{% url 'vendor_import' %}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14v5h16v-5M12 3v11m-4-4 4 4 4-4"></path></svg>
+    Import Vendor Dates
+  </a>
+</section>
+
+<!-- Top Shortage Materials -->
+{% if top_shortages %}
+<section class="card dashboard-section">
+  <div class="card-head">
+    <div>
+      <h2>Top Shortage Materials</h2>
+      <p class="card-desc">Materials with the highest net shortage quantities.</p>
+    </div>
+    <a class="button" href="{% url 'shortages' %}">View all →</a>
+  </div>
+  <div class="table-wrap mt-3">
+    <table class="shortage-summary-table">
+      <thead>
+        <tr>
+          <th>Material Code</th>
+          <th>Description</th>
+          <th>WBS Element</th>
+          <th>ZPP7 Qty</th>
+          <th>Project Stock</th>
+          <th>Net Shortage</th>
+          <th>Vendor</th>
+          <th>Scope</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in top_shortages %}
+        <tr>
+          <td><span class="text-mono">{{ row.material_code }}</span></td>
+          <td style="white-space:normal;max-width:260px;">{{ row.description|default_if_none:''|truncatewords:10 }}</td>
+          <td><span class="text-mono">{{ row.wbs_element }}</span></td>
+          <td class="num font-tabular">{{ row.zpp7_qty|floatformat:1 }}</td>
+          <td class="num font-tabular">{{ row.project_stock|floatformat:1 }}</td>
+          <td class="num font-tabular shortage-critical font-semibold">{{ row.net_shortage|floatformat:1 }}</td>
+          <td>{{ row.vendor|default_if_none:"—"|truncatewords:4 }}</td>
+          <td>{% if row.scope %}<span class="badge {% if row.scope == 'ABB' %}badge-red{% else %}badge-blue{% endif %}">{{ row.scope }}</span>{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<!-- Projects Overview -->
+{% if projects %}
+<section class="card dashboard-section">
+  <div class="card-head">
+    <div>
+      <h2>Processed Projects</h2>
+      <p class="card-desc">Projects with saved shortage registers.</p>
+    </div>
+    <a class="button" href="{% url 'input' %}">Manage projects →</a>
+  </div>
+  <div class="mt-3 flex flex-wrap gap-2">
+    {% for project in projects %}
+    <a class="quick-action" href="{% url 'shortages' %}?project_id={{ project|urlencode }}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"></rect><path d="M9 4.5h6"></path></svg>
+      {{ project }}
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% endblock %}

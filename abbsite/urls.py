@@ -2,7 +2,8 @@ from django.urls import path
 from shortage import views
 
 urlpatterns = [
-    path("", views.shortages, name="shortages"),
+    path("", views.dashboard, name="dashboard"),
+    path("shortages/", views.shortages, name="shortages"),
     path("input/", views.input_page, name="input"),
     path("vendor-track/", views.vendor_track, name="vendor_track"),
     path("vendor-import/", views.vendor_import, name="vendor_import"),

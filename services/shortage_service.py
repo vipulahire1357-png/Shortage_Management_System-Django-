@@ -371,21 +371,15 @@ def build_rows(
             bom_totals[key]["req"] += row["Req Quantity"]
 
     output: list[tuple[Any, ...]] = []
-    missing_vendor_rows = 0
-    multiple_me2m_vendor_rows = 0
     for (ref_code, wbs, material), bom in sorted(bom_totals.items()):
         unrestricted = storage_totals.get((wbs, material), 0.0)
         order_qty, open_qty = order_totals.get((wbs, material), [0.0, 0.0])
         pr_qty = pr_totals.get((wbs, material), 0.0)
         net_shortage = max(bom["req"] - unrestricted, 0.0)
         free_stock = free_stock_totals.get(material, 0.0)
-        vendor_detail, has_vendor_conflict = resolve_material_vendor(
+        vendor_detail, _ = resolve_material_vendor(
             vendor_details.get(material, [])
         )
-        if has_vendor_conflict:
-            multiple_me2m_vendor_rows += 1
-        if vendor_detail is None:
-            missing_vendor_rows += 1
         remarks = ""
         scope = material_scope.get(material, "")
 
@@ -411,14 +405,6 @@ def build_rows(
             "No rows qualified for net_shortage. Check that ZPP7 Material "
             "Ref Codes match wbs_element and that scopelist Scope values "
             "contain 'ABB' or 'Vendor Scope'."
-        )
-    if missing_vendor_rows or multiple_me2m_vendor_rows:
-        print(
-            f"ME2M material-key mapping: {missing_vendor_rows} shortage row(s) "
-            "have no matching ME2M Vendor Detail; "
-            f"{multiple_me2m_vendor_rows} row(s) have multiple distinct ME2M "
-            "values and use the first value in report order. Shortage calculation continues.",
-            file=sys.stderr,
         )
     return output
 
