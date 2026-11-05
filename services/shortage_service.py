@@ -158,24 +158,102 @@ def normalize_scope(value: Any) -> str:
     return clean_text(value).upper()
 
 
-def resolve_material_vendor(me2m_vendors: list[str]) -> tuple[str | None, bool]:
-    """Return the first ME2M Vendor Detail for a material key.
+class VendorResolution(tuple):
+    """Result of vendor resolution. Unpacks as (vendor, has_conflict).
 
-    Preserve the ME2M report order when a material appears more than once and
-    return one value only. The bool indicates that the material had multiple
-    distinct ME2M values; it does not prevent the material-key lookup.
+    Attributes:
+        vendor: Selected vendor string if uniquely resolved; None if unavailable or unresolved.
+        has_conflict: True if multiple distinct vendors exist in ME2M for this material.
+        status: One of:
+            - "SINGLE_VENDOR": exactly one vendor association in ME2M records.
+            - "MULTIPLE_VENDORS": multiple vendors present, resolved separately by context.
+            - "VENDOR_UNAVAILABLE": no matching vendor in ME2M.
+            - "ALLOCATION_UNRESOLVED": multiple vendors exist, but allocation cannot be determined reliably.
+        vendors: List of all distinct vendor names found in ME2M.
     """
+
+    def __new__(
+        cls,
+        vendor: str | None,
+        has_conflict: bool,
+        status: str = "",
+        vendors: list[str] | None = None,
+    ):
+        inst = super().__new__(cls, (vendor, has_conflict))
+        inst.vendor = vendor
+        inst.has_conflict = has_conflict
+        inst.status = status
+        inst.vendors = list(vendors or [])
+        return inst
+
+
+def resolve_material_vendor(
+    me2m_vendors: list[str] | list[dict[str, Any]],
+    *,
+    wbs: str | None = None,
+    me2m_records: list[dict[str, Any]] | None = None,
+) -> VendorResolution:
+    """Resolve vendor associations using ME2M records and context.
+
+    Never silently selects the first vendor when multiple distinct vendors exist.
+    Distinguishes between single vendor, multiple resolved vendors, vendor unavailable,
+    and unresolved allocation.
+    """
+    vendor_strings: list[str] = []
+    for item in me2m_vendors:
+        if isinstance(item, dict):
+            val = item.get("Vendor Detail") or item.get("vendor_detail") or item.get("Vendor")
+            if val:
+                vendor_strings.append(str(val))
+        elif item is not None:
+            vendor_strings.append(str(item))
+
     unique_vendors: list[str] = []
     seen: set[str] = set()
-    for value in me2m_vendors:
+    for value in vendor_strings:
         vendor = " ".join(clean_text(value).split())
         identity = vendor.casefold()
         if vendor and identity not in seen:
             seen.add(identity)
             unique_vendors.append(vendor)
+
     if not unique_vendors:
-        return None, False
-    return unique_vendors[0], len(unique_vendors) > 1
+        return VendorResolution(None, False, status="VENDOR_UNAVAILABLE", vendors=[])
+
+    if len(unique_vendors) == 1:
+        return VendorResolution(unique_vendors[0], False, status="SINGLE_VENDOR", vendors=unique_vendors)
+
+    # Multiple distinct vendors found.
+    # Check if WBS element context and ME2M records allow resolving to a single vendor.
+    if wbs and me2m_records:
+        clean_w = clean_text(wbs).casefold()
+        wbs_vendors: list[str] = []
+        wbs_seen: set[str] = set()
+        for rec in me2m_records:
+            rec_wbs = clean_text(rec.get("WBS Element") or rec.get("wbs_element")).casefold()
+            if rec_wbs and rec_wbs == clean_w:
+                v = " ".join(clean_text(rec.get("Vendor Detail") or rec.get("vendor_detail") or "").split())
+                v_id = v.casefold()
+                if v and v_id not in wbs_seen:
+                    wbs_seen.add(v_id)
+                    wbs_vendors.append(v)
+
+        if len(wbs_vendors) == 1:
+            return VendorResolution(
+                wbs_vendors[0],
+                False,
+                status="MULTIPLE_VENDORS",
+                vendors=unique_vendors,
+            )
+
+    # Cannot reliably determine which vendor this belongs to:
+    # Do NOT guess or select the first vendor! Flag as unresolved.
+    return VendorResolution(
+        None,
+        True,
+        status="ALLOCATION_UNRESOLVED",
+        vendors=unique_vendors,
+    )
 
 
 def to_number(value: Any, *, context: str) -> float:
@@ -267,23 +345,32 @@ def build_rows(
             conn, me2j_table,
             ["Material Code", "Order Quantity", "Open Quantity", "WBS Element"],
         )
+        me2m_cols = [r[1] for r in conn.execute(f"PRAGMA table_info({quote_identifier(me2m_table)})").fetchall()]
+        cols_to_read = ["Material Code", "Vendor Detail"]
+        wbs_col = next((c for c in me2m_cols if c.casefold() in ("wbs element", "wbs")), None)
+        if wbs_col and wbs_col not in cols_to_read:
+            cols_to_read.append(wbs_col)
         me2m_rows = read_table(
-            conn, me2m_table, ["Material Code", "Vendor Detail"],
+            conn, me2m_table, cols_to_read,
             order_by_rowid=True,
         )
         pr_rows = read_table(
             conn, pr_table, ["Material Code", "PR Quantity", "WBS Element"]
         )
 
-    # Vendor Detail comes exclusively from ME2M, keyed only by Material Code.
-    # Preserve report order so repeated ME2M rows resolve consistently to the
-    # first non-empty value rather than creating a multi-vendor shortage row.
+    # Vendor Detail comes exclusively from ME2M.
+    # Preserve records with project/WBS context where available.
     vendor_details: dict[str, list[str]] = defaultdict(list)
+    me2m_records_by_material: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in me2m_rows:
         material = clean_text(row["Material Code"])
         vendor = clean_text(row["Vendor Detail"])
         if material and vendor:
             vendor_details[material].append(vendor)
+            rec = {"Material Code": material, "Vendor Detail": vendor}
+            if wbs_col and wbs_col in row:
+                rec["WBS Element"] = clean_text(row[wbs_col])
+            me2m_records_by_material[material].append(rec)
 
     # One Material Ref Code may theoretically map to multiple WBS elements.
     wbs_by_ref: dict[str, set[str]] = defaultdict(set)
@@ -377,10 +464,20 @@ def build_rows(
         pr_qty = pr_totals.get((wbs, material), 0.0)
         net_shortage = max(bom["req"] - unrestricted, 0.0)
         free_stock = free_stock_totals.get(material, 0.0)
-        vendor_detail, _ = resolve_material_vendor(
-            vendor_details.get(material, [])
+        vendor_res = resolve_material_vendor(
+            vendor_details.get(material, []),
+            wbs=wbs,
+            me2m_records=me2m_records_by_material.get(material),
         )
-        remarks = ""
+        if vendor_res.status in ("SINGLE_VENDOR", "MULTIPLE_VENDORS"):
+            vendor_detail = vendor_res.vendor
+            remarks = ""
+        elif vendor_res.status == "ALLOCATION_UNRESOLVED":
+            vendor_detail = f"[Unresolved] {' | '.join(vendor_res.vendors)}"
+            remarks = f"[WARNING: Allocation Unresolved — Multiple ME2M vendors: {', '.join(vendor_res.vendors)}]"
+        else:
+            vendor_detail = None
+            remarks = ""
         scope = material_scope.get(material, "")
 
         output.append((

@@ -539,7 +539,7 @@ class TestShortageMaterialVendorResolution(unittest.TestCase):
         self.assertEqual(vendor, "1100001469 DEVSHREE ENTERPRISES")
         self.assertFalse(conflict)
 
-    def test_same_material_uses_first_distinct_me2m_value_in_report_order(self):
+    def test_same_material_with_multiple_me2m_values_marks_conflict_without_silent_selection(self):
         from services.shortage_service import resolve_material_vendor
 
         vendor, conflict = resolve_material_vendor(
@@ -550,17 +550,17 @@ class TestShortageMaterialVendorResolution(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(vendor, "701501026 ABB India Limited")
+        self.assertIsNone(vendor)
         self.assertTrue(conflict)
 
-    def test_multiple_me2m_values_still_produce_one_vendor_detail(self):
+    def test_multiple_me2m_values_do_not_silently_pick_first_vendor(self):
         from services.shortage_service import resolve_material_vendor
 
         vendor, conflict = resolve_material_vendor(
             ["1100001469 DEVSHREE ENTERPRISES", "1100009999 SIEMENS"]
         )
 
-        self.assertEqual(vendor, "1100001469 DEVSHREE ENTERPRISES")
+        self.assertIsNone(vendor)
         self.assertTrue(conflict)
 
     def test_me2m_supplying_plant_value_is_used_when_it_is_first_match(self):
@@ -575,6 +575,194 @@ class TestShortageMaterialVendorResolution(unittest.TestCase):
         from services.shortage_service import resolve_material_vendor
 
         self.assertEqual(resolve_material_vendor([]), (None, False))
+
+
+class TestPhase3ME2MVendorMapping(unittest.TestCase):
+    """Phase 3: ME2M Vendor Mapping Improvements."""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.test_dir) / "test_services.db"
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_1_material_associated_with_one_vendor(self):
+        """1. A material associated with one vendor resolves uniquely with SINGLE_VENDOR status."""
+        from services.shortage_service import resolve_material_vendor
+        res = resolve_material_vendor(["1100001469 DEVSHREE ENTERPRISES"])
+        vendor, conflict = res
+        self.assertEqual(vendor, "1100001469 DEVSHREE ENTERPRISES")
+        self.assertFalse(conflict)
+        self.assertEqual(res.status, "SINGLE_VENDOR")
+        self.assertEqual(res.vendors, ["1100001469 DEVSHREE ENTERPRISES"])
+
+    def test_2_material_associated_with_multiple_vendors(self):
+        """2. A material associated with multiple vendors returns ALLOCATION_UNRESOLVED and does not pick first vendor."""
+        from services.shortage_service import resolve_material_vendor
+        res = resolve_material_vendor(["Vendor One", "Vendor Two"])
+        vendor, conflict = res
+        self.assertIsNone(vendor)
+        self.assertTrue(conflict)
+        self.assertEqual(res.status, "ALLOCATION_UNRESOLVED")
+        self.assertEqual(res.vendors, ["Vendor One", "Vendor Two"])
+
+    def test_3_different_quantities_of_same_material_with_different_vendors(self):
+        """3. Different quantities of the same material associated with different vendors remain separate."""
+        from services.vendortrack_service import _ensure_vendor_track_schema
+        with sqlite3.connect(self.db_path) as conn:
+            _ensure_vendor_track_schema(conn)
+            conn.execute(
+                'INSERT INTO vendor_track ("project_id", "Vendor Detail", "WBS Element", "Material Code", "Description", "Quantity", "Vendor Date", "Proposed Date", "Final Date", "Status") '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ("P1", "Vendor Alpha", "WBS-1", "MAT-SPLIT", "Dual Source Cable", 15.0, "", "", "", "")
+            )
+            conn.execute(
+                'INSERT INTO vendor_track ("project_id", "Vendor Detail", "WBS Element", "Material Code", "Description", "Quantity", "Vendor Date", "Proposed Date", "Final Date", "Status") '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ("P1", "Vendor Beta", "WBS-2", "MAT-SPLIT", "Dual Source Cable", 35.0, "", "", "", "")
+            )
+            rows = conn.execute(
+                'SELECT "Vendor Detail", "Quantity" FROM vendor_track WHERE "Material Code" = ? ORDER BY "Quantity"',
+                ("MAT-SPLIT",)
+            ).fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "Vendor Alpha")
+        self.assertEqual(rows[0][1], 15.0)
+        self.assertEqual(rows[1][0], "Vendor Beta")
+        self.assertEqual(rows[1][1], 35.0)
+
+    def test_4_same_material_across_multiple_projects_or_wbs(self):
+        """4. The same material appearing across multiple projects/WBS elements resolves to each respective vendor."""
+        from services.shortage_service import resolve_material_vendor
+        me2m_records = [
+            {"Material Code": "MAT-MULTI", "WBS Element": "WBS-PRJ1", "Vendor Detail": "Vendor A"},
+            {"Material Code": "MAT-MULTI", "WBS Element": "WBS-PRJ2", "Vendor Detail": "Vendor B"},
+        ]
+        vendors = ["Vendor A", "Vendor B"]
+
+        res_wbs1 = resolve_material_vendor(vendors, wbs="WBS-PRJ1", me2m_records=me2m_records)
+        self.assertEqual(res_wbs1.vendor, "Vendor A")
+        self.assertFalse(res_wbs1.has_conflict)
+        self.assertEqual(res_wbs1.status, "MULTIPLE_VENDORS")
+
+        res_wbs2 = resolve_material_vendor(vendors, wbs="WBS-PRJ2", me2m_records=me2m_records)
+        self.assertEqual(res_wbs2.vendor, "Vendor B")
+        self.assertFalse(res_wbs2.has_conflict)
+        self.assertEqual(res_wbs2.status, "MULTIPLE_VENDORS")
+
+    def test_5_material_with_no_matching_me2m_vendor(self):
+        """5. A material with no matching ME2M vendor record yields VENDOR_UNAVAILABLE."""
+        from services.shortage_service import resolve_material_vendor
+        res = resolve_material_vendor([])
+        vendor, conflict = res
+        self.assertIsNone(vendor)
+        self.assertFalse(conflict)
+        self.assertEqual(res.status, "VENDOR_UNAVAILABLE")
+        self.assertEqual(res.vendors, [])
+
+    def test_6_ambiguous_allocation_flagged_rather_than_guessed(self):
+        """6. Ambiguous allocation across multiple vendors is flagged for manual review rather than guessed."""
+        from services.shortage_service import resolve_material_vendor
+        res = resolve_material_vendor(["Vendor X", "Vendor Y", "Vendor Z"])
+        self.assertIsNone(res.vendor)
+        self.assertTrue(res.has_conflict)
+        self.assertEqual(res.status, "ALLOCATION_UNRESOLVED")
+        self.assertEqual(res.vendors, ["Vendor X", "Vendor Y", "Vendor Z"])
+        self.assertNotIn(res.vendor, ["Vendor X", "Vendor Y", "Vendor Z"])
+
+    def test_7_vendor_specific_exports_contain_only_selected_vendor_eligible_records(self):
+        """7. Vendor-specific export contains only the selected vendor's eligible records and excludes unresolved rows."""
+        from services.vendortrack_service import _ensure_vendor_track_schema
+        from services.vendor_request_export import export_vendor_date_request
+        with sqlite3.connect(self.db_path) as conn:
+            _ensure_vendor_track_schema(conn)
+            conn.execute(
+                'INSERT INTO vendor_track ("project_id", "Vendor Detail", "WBS Element", "Material Code", "Description", "Quantity", "Vendor Date", "Proposed Date", "Final Date", "Status") '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ("P1", "Vendor One", "WBS-1", "MAT-01", "Widget A", 10.0, "", "", "", "")
+            )
+            conn.execute(
+                'INSERT INTO vendor_track ("project_id", "Vendor Detail", "WBS Element", "Material Code", "Description", "Quantity", "Vendor Date", "Proposed Date", "Final Date", "Status") '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ("P1", "Vendor Two", "WBS-2", "MAT-02", "Widget B", 20.0, "", "", "", "")
+            )
+            conn.execute(
+                'INSERT INTO vendor_track ("project_id", "Vendor Detail", "WBS Element", "Material Code", "Description", "Quantity", "Vendor Date", "Proposed Date", "Final Date", "Status") '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ("P1", "[Unresolved] Vendor One | Vendor Two", "WBS-3", "MAT-03", "Widget C", 30.0, "", "", "", "UNRESOLVED - MANUAL REVIEW")
+            )
+
+        output_dir = Path(self.test_dir) / "registers"
+        res = export_vendor_date_request(
+            vendor="Vendor One",
+            db_path=self.db_path,
+            output_root=output_dir,
+        )
+        self.assertTrue(res["success"])
+        self.assertEqual(res["row_count"], 1)
+        self.assertEqual(res["vendor"], "Vendor One")
+
+        with self.assertRaises(ValueError) as ctx:
+            export_vendor_date_request(
+                vendor="[Unresolved] Vendor One | Vendor Two",
+                db_path=self.db_path,
+                output_root=output_dir,
+            )
+        self.assertIn("unresolved", str(ctx.exception).lower())
+
+    def test_8_no_quantity_duplication_across_vendor_requests(self):
+        """8. No quantity duplication occurs across vendor requests."""
+        from services.vendortrack_service import _ensure_vendor_track_schema
+        from services.vendor_request_export import export_vendor_date_request
+        import openpyxl
+        with sqlite3.connect(self.db_path) as conn:
+            _ensure_vendor_track_schema(conn)
+            conn.execute(
+                'INSERT INTO vendor_track ("project_id", "Vendor Detail", "WBS Element", "Material Code", "Description", "Quantity", "Vendor Date", "Proposed Date", "Final Date", "Status") '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ("P1", "Supplier AAA", "WBS-1", "MAT-A", "Item A", 50.0, "", "", "", "")
+            )
+            conn.execute(
+                'INSERT INTO vendor_track ("project_id", "Vendor Detail", "WBS Element", "Material Code", "Description", "Quantity", "Vendor Date", "Proposed Date", "Final Date", "Status") '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ("P1", "Supplier BBB", "WBS-2", "MAT-B", "Item B", 75.0, "", "", "", "")
+            )
+
+        output_dir = Path(self.test_dir) / "registers"
+        res_a = export_vendor_date_request("Supplier AAA", db_path=self.db_path, output_root=output_dir)
+        res_b = export_vendor_date_request("Supplier BBB", db_path=self.db_path, output_root=output_dir)
+
+        wb_a = openpyxl.load_workbook(res_a["output_path"])
+        wb_b = openpyxl.load_workbook(res_b["output_path"])
+        rows_a = list(wb_a.active.iter_rows(values_only=True))[1:]
+        rows_b = list(wb_b.active.iter_rows(values_only=True))[1:]
+
+        materials_a = {r[2]: r[4] for r in rows_a}
+        self.assertEqual(materials_a, {"MAT-A": 50.0})
+
+        materials_b = {r[2]: r[4] for r in rows_b}
+        self.assertEqual(materials_b, {"MAT-B": 75.0})
+
+        self.assertTrue(set(materials_a.keys()).isdisjoint(set(materials_b.keys())))
+
+    def test_9_regression_resolve_material_vendor_never_silently_selects_first_vendor(self):
+        """9. Regression: resolve_material_vendor() never silently selects the first vendor when multiple exist."""
+        from services.shortage_service import resolve_material_vendor
+        multiple = [
+            "701501026  ABB India Limited",
+            "701501026 ABB India Limited",
+            "INHN EPDS-LV Systems, Bangalore",
+            "1100009999 SIEMENS",
+        ]
+        res = resolve_material_vendor(multiple)
+        vendor, conflict = res
+        self.assertIsNone(vendor, "Vendor must NOT be silently assigned when multiple vendors exist")
+        self.assertNotEqual(vendor, "701501026 ABB India Limited")
+        self.assertTrue(conflict)
+        self.assertEqual(res.status, "ALLOCATION_UNRESOLVED")
+        self.assertIn("INHN EPDS-LV Systems, Bangalore", res.vendors)
+        self.assertIn("1100009999 SIEMENS", res.vendors)
 
 
 class TestNestedRegisterExport(unittest.TestCase):

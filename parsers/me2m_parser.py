@@ -110,13 +110,19 @@ def load_me2m(report_path: Path) -> pd.DataFrame:
         if header_index is None:
             continue
 
+        cols = list(OUTPUT_COLUMNS)
         source_positions = [
             header_map[normalize_header(source)] for source in COLUMN_MAP
         ]
-        data = raw.iloc[header_index + 1:, source_positions].copy()
-        data.columns = OUTPUT_COLUMNS
+        wbs_key = next((k for k in ("wbs element", "wbs") if k in header_map), None)
+        if wbs_key and header_map[wbs_key] not in source_positions:
+            cols.append("WBS Element")
+            source_positions.append(header_map[wbs_key])
 
-        for column in OUTPUT_COLUMNS:
+        data = raw.iloc[header_index + 1:, source_positions].copy()
+        data.columns = cols
+
+        for column in cols:
             data[column] = data[column].map(clean_cell)
 
         data = data.dropna(how="all", subset=OUTPUT_COLUMNS)
@@ -137,15 +143,17 @@ def load_me2m(report_path: Path) -> pd.DataFrame:
         )
 
     result = pd.concat(frames, ignore_index=True)
-    return result[OUTPUT_COLUMNS].reset_index(drop=True)
+    all_cols = list(result.columns)
+    return result[all_cols].reset_index(drop=True)
 
 
 def write_to_database(data: pd.DataFrame, db_path: Path = DB_PATH) -> None:
     """Transactionally replace only ME2M, preserving every other database table."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    column_definitions = ", ".join(f'"{column}" TEXT' for column in OUTPUT_COLUMNS)
-    quoted_columns = ", ".join(f'"{column}"' for column in OUTPUT_COLUMNS)
-    placeholders = ", ".join("?" for _ in OUTPUT_COLUMNS)
+    cols = list(data.columns)
+    column_definitions = ", ".join(f'"{column}" TEXT' for column in cols)
+    quoted_columns = ", ".join(f'"{column}"' for column in cols)
+    placeholders = ", ".join("?" for _ in cols)
 
     with sqlite3.connect(db_path, timeout=30) as connection:
         connection.execute("PRAGMA busy_timeout = 5000")
@@ -157,7 +165,7 @@ def write_to_database(data: pd.DataFrame, db_path: Path = DB_PATH) -> None:
             connection.executemany(
                 f'INSERT INTO "{TABLE_NAME}_new" ({quoted_columns}) '
                 f"VALUES ({placeholders})",
-                data[OUTPUT_COLUMNS].itertuples(index=False, name=None),
+                data[cols].itertuples(index=False, name=None),
             )
             connection.execute(f'DROP TABLE IF EXISTS "{TABLE_NAME}"')
             connection.execute(

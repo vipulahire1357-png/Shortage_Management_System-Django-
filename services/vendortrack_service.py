@@ -225,6 +225,13 @@ def read_register_to_vendor_track_rows(
                 p_date = clean_text(r[pd_idx]) if (pd_idx is not None and pd_idx < len(r)) else ""
                 f_date = clean_text(r[fd_idx]) if (fd_idx is not None and fd_idx < len(r)) else ""
 
+            if not vendor:
+                status = "VENDOR UNAVAILABLE"
+            elif "unresolved" in vendor.casefold():
+                status = "UNRESOLVED - MANUAL REVIEW"
+            else:
+                status = ""
+
             output.append((
                 project_id,
                 vendor,
@@ -235,7 +242,7 @@ def read_register_to_vendor_track_rows(
                 v_date,
                 p_date,
                 f_date,
-                "",  # Status
+                status,
             ))
 
     wb.close()
@@ -383,17 +390,28 @@ def build_rows_from_net_shortage(
 
     output = []
     for row in source_rows:
-        vendors = sorted({v.strip() for v in clean_text(row["Vendor Detail"]).split(" | ") if v.strip()})
-        for vendor in vendors:
-            output.append((
-                project_id,
-                vendor,
-                clean_text(row["WBS Element"]),
-                clean_text(row["Material Code"]),
-                clean_text(row["Material Description"]),
-                row["Net Shortage"] if row["Net Shortage"] is not None else 0,
-                "", "", "", "",
-            ))
+        raw_vendor = clean_text(row["Vendor Detail"])
+        wbs = clean_text(row["WBS Element"])
+        material = clean_text(row["Material Code"])
+        desc = clean_text(row["Material Description"])
+        qty = row["Net Shortage"] if row["Net Shortage"] is not None else 0.0
+
+        if not raw_vendor:
+            status = "VENDOR UNAVAILABLE"
+        elif "unresolved" in raw_vendor.casefold():
+            status = "UNRESOLVED - MANUAL REVIEW"
+        else:
+            status = ""
+
+        output.append((
+            project_id,
+            raw_vendor,
+            wbs,
+            material,
+            desc,
+            qty,
+            "", "", "", status,
+        ))
     return output
 
 

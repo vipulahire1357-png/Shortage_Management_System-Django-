@@ -74,7 +74,7 @@
       <tbody>
         {% for row in records %}
         <tr>
-          <td>{{ row|get_item:'Vendor Detail' }}</td>
+          <td>{% with v_val=row|get_item:'Vendor Detail' st_val=row|get_item:'Status' %}{% if not v_val or st_val == 'VENDOR UNAVAILABLE' %}<span class="text-muted" title="Vendor unavailable in ME2M">—</span>{% elif 'unresolved' in v_val|lower or 'unresolved' in st_val|lower %}<span class="badge badge-warning" title="Allocation unresolved: multiple vendors exist in ME2M, manual review required">⚠️ {{ v_val }}</span>{% else %}{{ v_val }}{% endif %}{% endwith %}</td>
           <td><span class="text-mono">{{ row|get_item:'WBS Element' }}</span></td>
           <td><span class="text-mono">{{ row|get_item:'Material Code' }}</span></td>
           <td style="white-space:normal;max-width:240px;">{{ row|get_item:'Description' }}</td>

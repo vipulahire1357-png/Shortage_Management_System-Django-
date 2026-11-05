@@ -34,7 +34,8 @@ DEFAULT_VENDOR_REGISTERS_DIR = Path(
     os.getenv("VENDOR_REGISTERS_DIR", str(PROJECT_ROOT / "Vendor Registers"))
 )
 
-# Required Excel columns in exact order
+# Required Excel columns in exact order (Project ID is hidden in the workbook
+# but required by the vendor response import service for date-matching).
 VENDOR_REQUEST_COLUMNS = [
     "Vendor Detail",
     "WBS Element",
@@ -44,11 +45,11 @@ VENDOR_REQUEST_COLUMNS = [
     "Vendor Date",
     "Proposed Date",
     "Final Date",
+    "Project ID",
 ]
-INTERNAL_PROJECT_ID_COLUMN = "Project ID"
 
 NUMERIC_COLUMNS = {"Quantity"}
-TEXT_COLUMNS = {"Material Code", "WBS Element", "Vendor Detail", "Description"}
+TEXT_COLUMNS = {"Material Code", "WBS Element", "Vendor Detail", "Description", "Project ID"}
 DATE_COLUMNS = {"Vendor Date", "Proposed Date", "Final Date"}
 
 COLUMN_WIDTHS = [
@@ -60,6 +61,7 @@ COLUMN_WIDTHS = [
     16,  # Vendor Date
     16,  # Proposed Date
     16,  # Final Date
+    16,  # Project ID (hidden)
 ]
 
 
@@ -135,6 +137,7 @@ def build_vendor_request_workbook(
     """
     Build an Excel workbook for the Vendor Date Request.
     Formatted as an Excel table with filters, frozen headers, and proper types.
+    Project ID is included as the last column (hidden) for response-matching.
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -146,21 +149,29 @@ def build_vendor_request_workbook(
     header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     ws.append(VENDOR_REQUEST_COLUMNS)
-    project_id_column = len(VENDOR_REQUEST_COLUMNS) + 1
-    ws.cell(row=1, column=project_id_column, value=INTERNAL_PROJECT_ID_COLUMN)
-    ws.column_dimensions[get_column_letter(project_id_column)].hidden = True
     for cell in ws[1]:
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = header_align
 
+    # Project ID column is hidden from the vendor but preserved for matching
+    project_id_col_idx = VENDOR_REQUEST_COLUMNS.index("Project ID") + 1
+    ws.column_dimensions[get_column_letter(project_id_col_idx)].hidden = True
+
     for row in rows:
         row_data = []
         for col_name in VENDOR_REQUEST_COLUMNS:
-            if isinstance(row, sqlite3.Row):
+            # Project ID is stored as lowercase "project_id" in sqlite3 queries
+            if col_name == "Project ID":
+                if isinstance(row, sqlite3.Row):
+                    val = row["project_id"]
+                else:
+                    val = row.get("Project ID", row.get("project_id"))
+            elif isinstance(row, sqlite3.Row):
                 val = row[col_name]
             else:
                 val = row.get(col_name)
+
             if col_name in NUMERIC_COLUMNS:
                 try:
                     val = float(val) if val is not None else 0.0
@@ -173,10 +184,6 @@ def build_vendor_request_workbook(
                 val = str(val) if val is not None else ""
             row_data.append(val)
         ws.append(row_data)
-        project_id = row["project_id"] if isinstance(row, sqlite3.Row) else row.get("Project ID", row.get("project_id"))
-        project_cell = ws.cell(row=ws.max_row, column=project_id_column, value=str(project_id or ""))
-        project_cell.number_format = "@"
-        project_cell.protection = Protection(locked=True)
 
     total_rows = len(rows)
     total_cols = len(VENDOR_REQUEST_COLUMNS)
@@ -280,13 +287,20 @@ def export_vendor_date_request(
             "Multi-vendor export is not allowed."
         )
 
+    if "unresolved" in clean_vendor.casefold():
+        raise ValueError(
+            f"Cannot export Vendor Date Request for unresolved vendor '{clean_vendor}'. "
+            "Resolve vendor assignments before exporting."
+        )
+
     if not db_path.is_file():
         raise FileNotFoundError(f"Services database not found: {db_path}")
 
-    # Build query: export only rows with a strictly positive quantity.
+    # Build query: export only rows with a strictly positive quantity and resolved status.
     conditions: list[str] = [
         '"Vendor Detail" = ?',
         '"Quantity" > 0',
+        'COALESCE("Status", \'\') NOT LIKE \'%UNRESOLVED%\'',
     ]
     params: list[Any] = [clean_vendor]
 
