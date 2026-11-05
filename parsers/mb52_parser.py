@@ -3,11 +3,11 @@
 Run from the ABB_Shortage_System project root:
     python parsers\\mb52_parser.py
 
-Finds one IN_MM_INNR_MB52/MB52 report in data/raw/ (HTML or Excel).
-Extracts Material, Material Description, Unrestricted, and WBS Element.
-Writes them to data/global.db table "Storage".
+Finds an MB52 report in raw or project input folders (HTML or Excel).
+Extracts Material, Description, Project Stock Quantity, and WBS Element.
+Writes them to data/global.db table "MB52".
 
-Only "Storage" is refreshed; all other tables in global.db are preserved.
+Only "MB52" is refreshed; all other tables in global.db are preserved.
 """
 
 import os
@@ -21,13 +21,13 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = Path(os.getenv("ABB_RAW_DIR", PROJECT_ROOT / "data" / "raw")).resolve()
 DB_PATH = Path(os.getenv("ABB_GLOBAL_DB", PROJECT_ROOT / "data" / "global.db")).resolve()
-TABLE_NAME = "Storage"
-OUTPUT_COLUMNS = ["Material Code", "Material Description", "Unrestricted", "WBS Element"]
+TABLE_NAME = "MB52"
+OUTPUT_COLUMNS = ["Material Code", "Description", "Project Stock Quantity", "WBS Element"]
 
 SOURCE_ALIASES = {
-    "Material": {"material", "material number", "material no", "material code"},
-    "Material Description": {"material description", "material short text", "short text", "description"},
-    "Unrestricted": {"unrestricted", "unrestricted stock"},
+    "Material Code": {"material", "material number", "material no", "material code"},
+    "Description": {"material description", "material short text", "short text", "description"},
+    "Project Stock Quantity": {"unrestricted", "unrestricted stock", "unrestricted quantity"},
     "WBS Element": {"wbs element", "wbs", "work breakdown structure element", "work breakdown structure"},
 }
 
@@ -36,9 +36,9 @@ def normalize_header(value) -> str:
     if pd.isna(value):
         return ""
     text = str(value).replace("\xa0", " ").strip().lower()
-    text = re.sub(r"[\\s_\\-]+", " ", text)
+    text = re.sub(r"[\s_-]+", " ", text)
     text = re.sub(r"[^a-z0-9 ]", "", text)
-    return re.sub(r"\\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def clean_cell(value):
@@ -50,21 +50,28 @@ def clean_cell(value):
 
 
 def find_report_file(raw_dir: Path) -> Path:
-    if not raw_dir.exists():
-        raise FileNotFoundError(f"Raw-data folder not found: {raw_dir}. Create data/raw/ first.")
-
+    """Find a named MB52 report or identify a generically named report by headers."""
+    roots = [raw_dir, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
     extensions = {".htm", ".html", ".xlsx", ".xls", ".xlsm"}
-
-    def matches(token):
-        return sorted(
-            path for path in raw_dir.iterdir()
-            if path.is_file() and token in path.name.lower()
-            and path.suffix.lower() in extensions and not path.name.startswith("~$")
-        )
-
-    candidates = matches("in_mm_innr_mb52") or matches("mb52")
+    files = sorted({
+        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
+        if path.is_file() and path.suffix.casefold() in extensions
+        and not path.name.startswith("~$")
+    })
+    candidates = [p for p in files if "in_mm_innr_mb52" in p.stem.casefold()]
     if not candidates:
-        raise FileNotFoundError(f"No IN_MM_INNR_MB52/MB52 HTML or Excel report found in {raw_dir}")
+        candidates = [p for p in files if "mb52" in p.stem.casefold()]
+    if not candidates:
+        for path in files:
+            try:
+                extract_mb52(path)
+                candidates.append(path)
+            except Exception:
+                continue
+    if not candidates:
+        raise FileNotFoundError(
+            f"No MB52 HTML or Excel report found under {raw_dir} or project/global inputs."
+        )
     if len(candidates) > 1:
         names = "\n".join(f"  - {path.name}" for path in candidates)
         raise RuntimeError("Multiple MB52 report files found; keep only the intended report in data/raw/:\n" + names)
@@ -101,8 +108,8 @@ def extract_from_tables(tables) -> pd.DataFrame:
 
         selected = table.iloc[
             header_index + 1:,
-            [positions["Material"], positions["Material Description"],
-             positions["Unrestricted"], positions["WBS Element"]],
+            [positions["Material Code"], positions["Description"],
+             positions["Project Stock Quantity"], positions["WBS Element"]],
         ].copy()
         selected.columns = OUTPUT_COLUMNS
         for column in OUTPUT_COLUMNS:
@@ -114,17 +121,15 @@ def extract_from_tables(tables) -> pd.DataFrame:
     if not frames:
         raise ValueError(
             "Could not find a table containing Material, Material Description, "
-            "Unrestricted, and WBS Element."
+            "Unrestricted Quantity, and WBS Element."
         )
 
     result = pd.concat(frames, ignore_index=True)
     # Drop any repeated report-header rows.
-    signatures = {
-        "Material Code": normalize_header("Material"),
-        "Material Description": normalize_header("Material Description"),
-        "Unrestricted": normalize_header("Unrestricted"),
-        "WBS Element": normalize_header("WBS Element"),
-    }
+    signatures = {column: normalize_header(column) for column in OUTPUT_COLUMNS}
+    signatures["Material Code"] = normalize_header("Material")
+    signatures["Description"] = normalize_header("Material Description")
+    signatures["Project Stock Quantity"] = normalize_header("Unrestricted")
     is_header = result.apply(
         lambda row: all(normalize_header(row[col]) == signatures[col] for col in OUTPUT_COLUMNS),
         axis=1,
@@ -148,8 +153,8 @@ def extract_from_excel(report_path: Path) -> pd.DataFrame:
 
         selected = raw.iloc[
             header_index + 1:,
-            [positions["Material"], positions["Material Description"],
-             positions["Unrestricted"], positions["WBS Element"]],
+            [positions["Material Code"], positions["Description"],
+             positions["Project Stock Quantity"], positions["WBS Element"]],
         ].copy()
         selected.columns = OUTPUT_COLUMNS
         for column in OUTPUT_COLUMNS:
@@ -161,7 +166,7 @@ def extract_from_excel(report_path: Path) -> pd.DataFrame:
     if not frames:
         raise ValueError(
             "Could not find a header row containing Material, Material Description, "
-            "Unrestricted, and WBS Element in the Excel workbook."
+            "Unrestricted Quantity, and WBS Element in the Excel workbook."
         )
     return pd.concat(frames, ignore_index=True).reset_index(drop=True)
 
@@ -173,26 +178,28 @@ def extract_mb52(report_path: Path) -> pd.DataFrame:
     return extract_from_excel(report_path)
 
 
-def write_storage_table(data: pd.DataFrame, db_path: Path) -> None:
-    """Refresh only Storage, preserving all other tables in global.db."""
+def write_mb52_table(data: pd.DataFrame, db_path: Path) -> None:
+    """Refresh MB52 and remove the legacy Storage table."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as connection:
         with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute('DROP TABLE IF EXISTS "MB52"')
+            connection.execute('DROP TABLE IF EXISTS "Storage"')
             connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS "Storage" (
+                CREATE TABLE "MB52" (
                     "Material Code" TEXT,
-                    "Material Description" TEXT,
-                    "Unrestricted" TEXT,
+                    "Description" TEXT,
+                    "Project Stock Quantity" TEXT,
                     "WBS Element" TEXT
                 )
                 """
             )
-            connection.execute('DELETE FROM "Storage"')
             connection.executemany(
                 """
-                INSERT INTO "Storage"
-                    ("Material Code", "Material Description", "Unrestricted", "WBS Element")
+                INSERT INTO "MB52"
+                    ("Material Code", "Description", "Project Stock Quantity", "WBS Element")
                 VALUES (?, ?, ?, ?)
                 """,
                 data[OUTPUT_COLUMNS].itertuples(index=False, name=None),
@@ -204,7 +211,7 @@ def main() -> int:
         report_path = find_report_file(RAW_DIR)
         print(f"MB52 report found: {report_path.name}")
         extracted = extract_mb52(report_path)
-        write_storage_table(extracted, DB_PATH)
+        write_mb52_table(extracted, DB_PATH)
         print(f"Rows imported: {len(extracted)}")
         print(f"Database: {DB_PATH}")
         print(f'Table: "{TABLE_NAME}"')

@@ -5,18 +5,17 @@ Run from the ABB_Shortage_System project root:
     python parsers\scopelist_parser.py
 
 Input:
-    One Excel file whose filename contains "MATERIAL_SCOPE_LIST" in data/raw/
+    A Material Scope List workbook in raw, project, or global input folders.
 
 Extracts:
     Material -> Material Code
     Description -> Description
-    A column whose header starts with "Final Scope Finalization"
-        (or "Final Scope Finalisation", including extra text after it)
-        -> Scope
+    A "Final Scope" column (including Final Scope Finalization/Finalisation)
+        -> Final Scope
 
 Output:
-    global.db, table "scopelist"
-    Columns: Material Code | Description | Scope
+    global.db, table "ScopeList"
+    Columns: Material Code | Description | Final Scope
 
 This template does not process any report until you run it.
 """
@@ -34,8 +33,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = Path(os.getenv("ABB_RAW_DIR", PROJECT_ROOT / "data" / "raw")).resolve()
 DB_PATH = Path(os.getenv("ABB_GLOBAL_DB", PROJECT_ROOT / "data" / "global.db")).resolve()
 
-TABLE_NAME = "scopelist"
-OUTPUT_COLUMNS = ["Material Code", "Description", "Scope"]
+TABLE_NAME = "ScopeList"
+OUTPUT_COLUMNS = ["Material Code", "Description", "Final Scope"]
 
 
 def normalize_header(value) -> str:
@@ -54,6 +53,7 @@ def find_scope_column(columns):
     at the start of the header. Any text after the phrase is allowed.
     """
     prefixes = (
+        "final scope",
         "final scope finalization",
         "final scope finalisation",
     )
@@ -65,30 +65,33 @@ def find_scope_column(columns):
 
 
 def find_input_file(raw_dir: Path) -> Path:
-    """Find exactly one MATERIAL_SCOPE_LIST Excel file in data/raw."""
-    if not raw_dir.exists():
-        raise FileNotFoundError(
-            f"Raw-data folder not found: {raw_dir}. Create data/raw/ first."
-        )
-
+    """Find a named scope workbook or identify a generic filename by headers."""
+    roots = [raw_dir, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
     extensions = {".xlsx", ".xls", ".xlsm"}
-    candidates = [
-        path for path in raw_dir.iterdir()
+    files = sorted({
+        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
         if path.is_file()
-        and "material_scope_list" in path.name.lower()
         and path.suffix.lower() in extensions
         and not path.name.startswith("~$")
-    ]
+    })
+    candidates = [path for path in files if "material_scope_list" in path.stem.casefold()]
+    if not candidates:
+        for path in files:
+            try:
+                extract_scope_list(path)
+                candidates.append(path)
+            except Exception:
+                continue
 
     if not candidates:
         raise FileNotFoundError(
-            f"No Excel filename containing 'MATERIAL_SCOPE_LIST' found in {raw_dir}"
+            f"No Material Scope List workbook found under {raw_dir} or project/global inputs."
         )
     if len(candidates) > 1:
         names = "\n".join(f"  - {path.name}" for path in candidates)
         raise RuntimeError(
-            "Multiple MATERIAL_SCOPE_LIST files found. Keep only the intended "
-            f"report in data/raw/:\n{names}"
+            "Multiple Material Scope List files found. Keep only the intended "
+            f"report in the input folders:\n{names}"
         )
     return candidates[0]
 
@@ -120,74 +123,70 @@ def find_header_row(sheet: pd.DataFrame):
             return row_index, {
                 "Material": material_index,
                 "Description": description_index,
-                "Scope": scope_index,
+                "Final Scope": scope_index,
             }
     return None, None
 
 
 def extract_scope_list(report_path: Path) -> pd.DataFrame:
-    """Extract only Material, Description, and Scope from the workbook."""
-    workbook = pd.ExcelFile(report_path)
-
-    for sheet_name in workbook.sheet_names:
-        sheet = pd.read_excel(
-            report_path, sheet_name=sheet_name, header=None, dtype=object
-        )
-        header_row, positions = find_header_row(sheet)
-        if positions is None:
-            continue
-
-        result = sheet.iloc[
-            header_row + 1:,
-            [
-                positions["Material"],
-                positions["Description"],
-                positions["Scope"],
-            ],
-        ].copy()
-        result.columns = OUTPUT_COLUMNS
-
-        # Convert identifiers and values to text, preserving leading zeros.
-        for column in OUTPUT_COLUMNS:
-            result[column] = result[column].map(
-                lambda value: None
-                if pd.isna(value) or str(value).strip() == ""
-                else str(value).strip()
+    """Extract only Material, Description, and Final Scope."""
+    with pd.ExcelFile(report_path) as workbook:
+        for sheet_name in workbook.sheet_names:
+            sheet = pd.read_excel(
+                workbook, sheet_name=sheet_name, header=None, dtype=object
             )
+            header_row, positions = find_header_row(sheet)
+            if positions is None:
+                continue
 
-        # Remove rows where all three requested fields are blank.
-        result = result.dropna(how="all", subset=OUTPUT_COLUMNS)
-        return result.reset_index(drop=True)
+            result = sheet.iloc[
+                header_row + 1:,
+                [
+                    positions["Material"],
+                    positions["Description"],
+                    positions["Final Scope"],
+                ],
+            ].copy()
+            result.columns = OUTPUT_COLUMNS
+
+            for column in OUTPUT_COLUMNS:
+                result[column] = result[column].map(
+                    lambda value: None
+                    if pd.isna(value) or str(value).strip() == ""
+                    else str(value).strip()
+                )
+
+            result = result.dropna(how="all", subset=OUTPUT_COLUMNS)
+            return result.reset_index(drop=True)
 
     raise ValueError(
-        "Could not find headers for Material, Description, and "
+        "Could not find headers for Material, Description, and Final Scope "
         "'Final Scope Finalization/Finalisation...' in any worksheet. "
         "Update find_header_row() if the workbook uses different headings."
     )
 
 
 def write_scope_list(data: pd.DataFrame, db_path: Path) -> None:
-    """Create/replace global.db's scopelist table."""
+    """Replace global.db's ScopeList table and remove the legacy table."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(db_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scopelist (
-                "Material Code" TEXT,
-                "Description" TEXT,
-                "Scope" TEXT
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute('DROP TABLE IF EXISTS "ScopeList"')
+            connection.execute('DROP TABLE IF EXISTS "scopelist"')
+            connection.execute(
+                '''CREATE TABLE "ScopeList" (
+                    "Material Code" TEXT,
+                    "Description" TEXT,
+                    "Final Scope" TEXT
+                )'''
             )
-            """
-        )
-        connection.execute("DELETE FROM scopelist")
-        connection.executemany(
-            """
-            INSERT INTO scopelist ("Material Code", "Description", "Scope")
-            VALUES (?, ?, ?)
-            """,
-            data[OUTPUT_COLUMNS].itertuples(index=False, name=None),
-        )
+            connection.executemany(
+                '''INSERT INTO "ScopeList" ("Material Code", "Description", "Final Scope")
+                   VALUES (?, ?, ?)''',
+                data[OUTPUT_COLUMNS].itertuples(index=False, name=None),
+            )
 
 
 def main() -> int:

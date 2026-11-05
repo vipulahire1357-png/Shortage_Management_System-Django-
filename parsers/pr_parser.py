@@ -2,10 +2,10 @@
 Purchase Requisition (PR) report parser.
 
 Extracts:
+    WBS Element    -> WBS Element
     Material       -> Material Code
     Short Text     -> Description
     Quantity       -> PR Quantity
-    WBS Element    -> WBS Element
 
 Writes the result to data/global.db, table PR.
 Supports SAP tab-delimited UTF-16 exports that may have an .xls extension,
@@ -27,10 +27,10 @@ DB_PATH = Path(os.getenv("ABB_GLOBAL_DB", PROJECT_ROOT / "data" / "global.db")).
 TABLE_NAME = "PR"
 
 OUTPUT_COLUMNS = [
+    "WBS Element",
     "Material Code",
     "Description",
     "PR Quantity",
-    "WBS Element",
 ]
 
 # Accepted source headers (matched case/spacing-insensitively).
@@ -58,33 +58,39 @@ def normalize_header(value) -> str:
 
 
 def find_report() -> Path:
-    """Find one PR report in data/raw."""
-    if not RAW_DIR.is_dir():
-        raise FileNotFoundError(f"Raw reports directory not found: {RAW_DIR}")
-
-    candidates = [
-        path for path in RAW_DIR.iterdir()
+    """Find a named PR report or identify a generic filename by its headers."""
+    roots = [RAW_DIR, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
+    extensions = {".xls", ".xlsx", ".xlsm", ".txt", ".tsv", ".csv"}
+    files = sorted({
+        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
         if path.is_file()
-        and path.suffix.lower() in {".xls", ".xlsx", ".xlsm", ".txt", ".tsv", ".csv"}
+        and path.suffix.lower() in extensions
         and not path.name.startswith("~$")
-        and (
-            path.stem.strip().lower() in {"pr", "pr 1", "purchase requisition"}
-            or path.stem.strip().lower().startswith("pr ")
-            or "purchase requisition" in path.stem.lower()
-        )
+    })
+    candidates = [
+        path for path in files
+        if path.stem.strip().casefold() in {"pr", "pr 1", "purchase requisition"}
+        or path.stem.strip().casefold().startswith("pr ")
+        or "purchase requisition" in path.stem.casefold()
     ]
+    if not candidates:
+        for path in files:
+            try:
+                load_pr_report(path)
+                candidates.append(path)
+            except Exception:
+                continue
 
     if not candidates:
         raise FileNotFoundError(
-            f"No PR report found in {RAW_DIR}. "
-            "Place the report there and name it with 'PR' in the filename."
+            f"No PR report found under {RAW_DIR} or the project/global input folders."
         )
 
     if len(candidates) > 1:
         names = "\n".join(f"  - {path.name}" for path in candidates)
         raise RuntimeError(
             "Multiple PR reports found. Keep only the intended report in "
-            f"{RAW_DIR}, or update find_report():\n{names}"
+            f"the input folders:\n{names}"
         )
 
     return candidates[0]
@@ -174,7 +180,9 @@ def load_pr_report(path: Path) -> pd.DataFrame:
         sheets = pd.read_excel(path, sheet_name=None, dtype=object, header=0)
         frame = None
         for candidate in sheets.values():
-            normalized = {normalize_header(c): c for c in candidate.columns}
+            normalized = {}
+            for column in candidate.columns:
+                normalized.setdefault(normalize_header(column), column)
             source_to_target = {}
             for canonical_source, aliases in SOURCE_HEADER_ALIASES.items():
                 matched = next(
@@ -202,7 +210,7 @@ def load_pr_report(path: Path) -> pd.DataFrame:
 
     normalized_to_original = {}
     for column in frame.columns:
-        normalized_to_original[normalize_header(column)] = column
+        normalized_to_original.setdefault(normalize_header(column), column)
 
     selected = pd.DataFrame()
     missing = []
@@ -274,26 +282,21 @@ def write_to_database(frame: pd.DataFrame) -> None:
         connection.execute("PRAGMA busy_timeout = 5000")
 
         with connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS "PR" (
-                    "Material Code" TEXT,
-                    "Description" TEXT,
-                    "PR Quantity" REAL,
-                    "WBS Element" TEXT
-                )
-                """
+            connection.execute("BEGIN IMMEDIATE")
+            column_definitions = ", ".join(
+                f'"{column}" TEXT' for column in OUTPUT_COLUMNS
             )
+            connection.execute('DROP TABLE IF EXISTS "PR_new"')
+            connection.execute(f'CREATE TABLE "PR_new" ({column_definitions})')
 
             placeholders = ", ".join("?" for _ in OUTPUT_COLUMNS)
             columns_sql = ", ".join(f'"{column}"' for column in OUTPUT_COLUMNS)
-
-            # Delete and insert within one transaction; other tables are untouched.
-            connection.execute('DELETE FROM "PR"')
             connection.executemany(
-                f'INSERT INTO "PR" ({columns_sql}) VALUES ({placeholders})',
+                f'INSERT INTO "PR_new" ({columns_sql}) VALUES ({placeholders})',
                 frame[OUTPUT_COLUMNS].itertuples(index=False, name=None),
             )
+            connection.execute('DROP TABLE IF EXISTS "PR"')
+            connection.execute('ALTER TABLE "PR_new" RENAME TO "PR"')
 
 
 def main() -> int:

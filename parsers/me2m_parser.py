@@ -1,7 +1,8 @@
 """ME2M purchase-order report parser for the ABB Shortage System.
 
-Reads an ME2M Excel report from data/raw and refreshes only the ME2M table
-in data/global.db. The parser is compatible with the project's parser registry:
+Reads an ME2M Excel report and refreshes only the ME2M table in data/global.db.
+It extracts only Material, Short Text, Vendor/supplying plant, WBS Element,
+and Delivery Date. The parser is compatible with the project's parser registry:
 main() returns 0 on success and 1 on failure.
 """
 
@@ -24,8 +25,12 @@ COLUMN_MAP = {
     "Material": "Material Code",
     "Short Text": "Description",
     "Vendor/supplying plant": "Vendor Detail",
+    "WBS Element": "WBS Element",
+    "Delivery Date": "Proposed Date",
 }
-OUTPUT_COLUMNS = ["Material Code", "Description", "Vendor Detail"]
+OUTPUT_COLUMNS = [
+    "Material Code", "Description", "Vendor Detail", "WBS Element", "Proposed Date"
+]
 SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".xlsm", ".xlsb"}
 
 
@@ -46,36 +51,40 @@ def clean_cell(value):
 
 
 def find_report() -> Path:
-    """Find exactly one ME2M Excel workbook in data/raw."""
-    if not RAW_DIR.is_dir():
-        raise FileNotFoundError(f"Raw reports directory not found: {RAW_DIR}")
-
-    candidates = sorted(
-        path for path in RAW_DIR.iterdir()
+    """Find an ME2M workbook by filename or by its required source headers."""
+    roots = [RAW_DIR, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
+    files = sorted({
+        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
         if path.is_file()
         and path.suffix.lower() in SUPPORTED_EXTENSIONS
-        and "me2m" in path.stem.lower()
         and not path.name.startswith("~$")
-    )
+    })
+    candidates = [path for path in files if "me2m" in path.stem.casefold()]
+    if not candidates:
+        for path in files:
+            try:
+                load_me2m(path)
+                candidates.append(path)
+            except Exception:
+                continue
 
     if not candidates:
         raise FileNotFoundError(
-            f"No ME2M Excel report found in {RAW_DIR}. "
-            "Place the workbook in data/raw and include 'ME2M' in its filename."
+            f"No ME2M Excel report found under {RAW_DIR} or the project/global input folders."
         )
 
     if len(candidates) > 1:
         names = "\n".join(f"  - {path.name}" for path in candidates)
         raise RuntimeError(
             "Multiple ME2M reports found. Keep only the intended workbook in "
-            f"{RAW_DIR}:\n{names}"
+            f"the input folders:\n{names}"
         )
 
     return candidates[0]
 
 
 def load_me2m(report_path: Path) -> pd.DataFrame:
-    """Find the required headers in workbook sheets and extract the 3 columns."""
+    """Find required headers in workbook sheets and extract only five columns."""
     try:
         # pandas uses pyxlsb for Excel Binary Workbook (.xlsb) files.
         sheets = pd.read_excel(report_path, sheet_name=None, header=None, dtype=object)
@@ -110,19 +119,14 @@ def load_me2m(report_path: Path) -> pd.DataFrame:
         if header_index is None:
             continue
 
-        cols = list(OUTPUT_COLUMNS)
         source_positions = [
             header_map[normalize_header(source)] for source in COLUMN_MAP
         ]
-        wbs_key = next((k for k in ("wbs element", "wbs") if k in header_map), None)
-        if wbs_key and header_map[wbs_key] not in source_positions:
-            cols.append("WBS Element")
-            source_positions.append(header_map[wbs_key])
 
         data = raw.iloc[header_index + 1:, source_positions].copy()
-        data.columns = cols
+        data.columns = OUTPUT_COLUMNS
 
-        for column in cols:
+        for column in OUTPUT_COLUMNS:
             data[column] = data[column].map(clean_cell)
 
         data = data.dropna(how="all", subset=OUTPUT_COLUMNS)
@@ -143,14 +147,13 @@ def load_me2m(report_path: Path) -> pd.DataFrame:
         )
 
     result = pd.concat(frames, ignore_index=True)
-    all_cols = list(result.columns)
-    return result[all_cols].reset_index(drop=True)
+    return result[OUTPUT_COLUMNS].reset_index(drop=True)
 
 
 def write_to_database(data: pd.DataFrame, db_path: Path = DB_PATH) -> None:
     """Transactionally replace only ME2M, preserving every other database table."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    cols = list(data.columns)
+    cols = OUTPUT_COLUMNS
     column_definitions = ", ".join(f'"{column}" TEXT' for column in cols)
     quoted_columns = ", ".join(f'"{column}"' for column in cols)
     placeholders = ", ".join("?" for _ in cols)

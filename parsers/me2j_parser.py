@@ -1,9 +1,8 @@
 """
 ME2J report parser for the ABB Shortage System.
 
-Reads an ME2J Excel report from data/raw, selects the required columns,
-renames them to the canonical schema, and refreshes the ME2J table in
-data/global.db without modifying other tables.
+Reads an ME2J Excel report, extracts only the five requested fields, and
+refreshes the ME2J table in data/global.db without modifying other tables.
 """
 
 import os
@@ -22,21 +21,19 @@ TABLE_NAME = "ME2J"
 
 # Source report header -> database column
 COLUMN_MAP = {
+    "WBS Element": "WBS Element",
     "Material": "Material Code",
     "Short Text": "Description",
-    "Vendor/supplying plant": "Vendor",
-    "Order Quantity": "Order Quantity",
-    "Still to be delivered (qty)": "Open Quantity",
-    "WBS Element": "WBS Element",
+    "Order Quantity": "Total PO Quantity",
+    "Still to be delivered (qty)": "Open PO Quantity",
 }
 
 OUTPUT_COLUMNS = [
+    "WBS Element",
     "Material Code",
     "Description",
-    "Vendor",
-    "Order Quantity",
-    "Open Quantity",
-    "WBS Element",
+    "Total PO Quantity",
+    "Open PO Quantity",
 ]
 
 SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".xlsm"}
@@ -51,29 +48,33 @@ def normalize_header(value):
 
 
 def find_report():
-    """Find an ME2J Excel report in data/raw."""
-    if not RAW_DIR.exists():
-        raise FileNotFoundError(f"Input directory does not exist: {RAW_DIR}")
-
-    candidates = [
-        path for path in RAW_DIR.iterdir()
+    """Find a named ME2J workbook or recognize a generically named report."""
+    roots = [RAW_DIR, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
+    files = sorted({
+        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
         if path.is_file()
         and path.suffix.lower() in SUPPORTED_EXTENSIONS
-        and "me2j" in path.stem.lower()
         and not path.name.startswith("~$")
-    ]
+    })
+    candidates = [path for path in files if "me2j" in path.stem.casefold()]
+    if not candidates:
+        for path in files:
+            try:
+                load_me2j(path)
+                candidates.append(path)
+            except Exception:
+                continue
 
     if not candidates:
         raise FileNotFoundError(
-            f"No ME2J Excel report found in {RAW_DIR}. "
-            "Place the report there and include 'ME2J' in its filename."
+            f"No ME2J Excel report found under {RAW_DIR} or the project/global input folders."
         )
 
     if len(candidates) > 1:
         names = "\n".join(f"  - {path.name}" for path in candidates)
         raise RuntimeError(
             "More than one ME2J report was found. Keep only the intended "
-            f"report in {RAW_DIR}, or update find_report():\n{names}"
+            f"report in the input folders:\n{names}"
         )
 
     return candidates[0]
@@ -94,7 +95,9 @@ def load_me2j(report_path):
         # Handle minor whitespace/case variations in Excel headers.
         normalized_to_original = {}
         for column in frame.columns:
-            normalized_to_original[normalize_header(column)] = column
+            # Keep the first occurrence when SAP supplies duplicate headers
+            # differing only by case (the leading WBS Element retains dots).
+            normalized_to_original.setdefault(normalize_header(column), column)
 
         if not required_headers.issubset(normalized_to_original):
             continue
@@ -141,33 +144,29 @@ def write_to_database(frame):
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(DB_PATH) as connection:
-        # TEXT storage preserves material codes and WBS identifiers as written.
-        column_definitions = ", ".join(
-            f'"{column}" TEXT' for column in OUTPUT_COLUMNS
-        )
-        connection.execute(
-            f'CREATE TABLE IF NOT EXISTS "{TABLE_NAME}" '
-            f"({column_definitions})"
-        )
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            # TEXT storage preserves material codes, quantities, and WBS identifiers.
+            column_definitions = ", ".join(
+                f'"{column}" TEXT' for column in OUTPUT_COLUMNS
+            )
+            connection.execute(f'DROP TABLE IF EXISTS "{TABLE_NAME}_new"')
+            connection.execute(
+                f'CREATE TABLE "{TABLE_NAME}_new" ({column_definitions})'
+            )
 
-        # Recreate the target table schema in case an earlier version differed.
-        connection.execute(f'DROP TABLE IF EXISTS "{TABLE_NAME}_new"')
-        connection.execute(
-            f'CREATE TABLE "{TABLE_NAME}_new" ({column_definitions})'
-        )
+            placeholders = ", ".join("?" for _ in OUTPUT_COLUMNS)
+            quoted_columns = ", ".join(f'"{column}"' for column in OUTPUT_COLUMNS)
+            connection.executemany(
+                f'INSERT INTO "{TABLE_NAME}_new" ({quoted_columns}) '
+                f"VALUES ({placeholders})",
+                frame[OUTPUT_COLUMNS].itertuples(index=False, name=None),
+            )
 
-        placeholders = ", ".join("?" for _ in OUTPUT_COLUMNS)
-        quoted_columns = ", ".join(f'"{column}"' for column in OUTPUT_COLUMNS)
-        connection.executemany(
-            f'INSERT INTO "{TABLE_NAME}_new" ({quoted_columns}) '
-            f"VALUES ({placeholders})",
-            frame[OUTPUT_COLUMNS].itertuples(index=False, name=None),
-        )
-
-        connection.execute(f'DROP TABLE "{TABLE_NAME}"')
-        connection.execute(
-            f'ALTER TABLE "{TABLE_NAME}_new" RENAME TO "{TABLE_NAME}"'
-        )
+            connection.execute(f'DROP TABLE IF EXISTS "{TABLE_NAME}"')
+            connection.execute(
+                f'ALTER TABLE "{TABLE_NAME}_new" RENAME TO "{TABLE_NAME}"'
+            )
 
 
 def main():
