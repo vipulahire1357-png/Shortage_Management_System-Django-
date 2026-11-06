@@ -492,13 +492,13 @@ class TestShortageCalculationMapping(unittest.TestCase):
             global_db, zpp_db = root / "global.db", root / "zpp7.db"
             with closing(sqlite3.connect(global_db)) as conn:
                 conn.executescript('''
-                    CREATE TABLE wbs_element ("Material Ref Code" TEXT, "WBS Element" TEXT);
+                    CREATE TABLE MB25 ("Material Ref Code" TEXT, "WBS Element" TEXT);
                     CREATE TABLE scopelist ("Material Code" TEXT, "Scope" TEXT);
                     CREATE TABLE Storage ("Material Code" TEXT, "Unrestricted" REAL, "WBS Element" TEXT);
                     CREATE TABLE ME2J ("Material Code" TEXT, "Order Quantity" REAL, "Open Quantity" REAL, "WBS Element" TEXT);
                     CREATE TABLE ME2M ("Material Code" TEXT, "Vendor Detail" TEXT);
                     CREATE TABLE PR ("Material Code" TEXT, "PR Quantity" REAL, "WBS Element" TEXT);
-                    INSERT INTO wbs_element VALUES ('REF1','WBS1');
+                    INSERT INTO MB25 VALUES ('REF1','WBS1');
                     INSERT INTO scopelist VALUES ('MAT-SHORT','ABB'),('MAT-OVER','VENDOR SCOPE');
                     INSERT INTO Storage VALUES ('MAT-SHORT',5,'WBS1'),('MAT-OVER',10,'WBS1');
                     INSERT INTO ME2J VALUES ('MAT-SHORT',7,3,'WBS1');

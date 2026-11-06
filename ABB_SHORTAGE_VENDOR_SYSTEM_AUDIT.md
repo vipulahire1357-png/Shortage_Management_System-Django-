@@ -21,7 +21,7 @@ ABB Shortage and Vendor Management/
 │   └── views.py                # Core web controllers, query builders & form processors
 ├── parsers/                    # Standalone SAP report parsers
 │   ├── __init__.py             # Parser registry and dynamic execution runner
-│   ├── mb25_parser.py          # WBS Element parser (MB25 -> global.db.wbs_element)
+│   ├── mb25_parser.py          # WBS Element parser (MB25 -> global.db.MB25)
 │   ├── mb52_parser.py          # Storage stock parser (MB52 -> global.db.Storage)
 │   ├── me2j_parser.py          # Open PO parser (ME2J -> global.db.ME2J)
 │   ├── me2m_parser.py          # Vendor PO parser (ME2M -> global.db.ME2M)
@@ -181,7 +181,7 @@ Default URL: `http://127.0.0.1:8000/`.
 | Report | Parser File | Actual Input Formats | Extracted Fields | Destination Table (DB) | Validation / Normalization | Connection Status |
 |---|---|---|---|---|---|---|
 | **ZPP7** | `parsers/zpp7_parser.py` | `.xls`, `.xlsx`, `.txt` (Tab-delimited text export) | `Material Ref Code`, `MRC Description`, `Material Code`, `Material Description`, `Req` | `zpp7_breakdown.db` (Table per Ref Code + `parser_metadata`) | Header matching; tab splitting; BOM hierarchy tracking; numeric conversion | **Fully Connected** (Invoked by `main.py`) |
-| **MB25** | `parsers/mb25_parser.py` | `.xlsx`, `.xls` | `Material` -> `Material Ref Code`, `Material Description` -> `MRC Description`, `WBS Element` | `global.db` -> `wbs_element` | Scans rows 0-10 for headers; replaces table transactionally; preserves other tables | **Fully Connected** (Invoked by `main.py`) |
+| **MB25** | `parsers/mb25_parser.py` | `.xlsx`, `.xls`, `.xlsm` | `Material` -> `Material Ref Code`, `WBS Element` | `global.db` -> `MB25` | Scans rows 0-49 for headers; composite key; preserves other tables | **Fully Connected** (Invoked by `main.py`) |
 | **MB52** | `parsers/mb52_parser.py` | `.htm`, `.html`, `.xlsx`, `.xls` | `Material`, `Material Description`, `Unrestricted`, `WBS Element` | `global.db` -> `Storage` | HTML table scraper or pandas Excel reader; handles multi-table dumps; numeric parsing | **Fully Connected** (Invoked by `main.py`) |
 | **ME2J** | `parsers/me2j_parser.py` | `.xlsx`, `.xls` | `Material` -> `Material Code`, `Description`, `Vendor`, `Order Quantity`, `Open Quantity`, `WBS Element` | `global.db` -> `ME2J` | Canonical header mapping; comma removal; empty cell to zero; full table refresh | **Fully Connected** (Invoked by `main.py`) |
 | **ME2M** | `parsers/me2m_parser.py` | `.xlsx`, `.xls`, `.xlsb` | `Material` -> `Material Code`, `Short Text` -> `Description`, `Vendor/supplying plant` -> `Vendor Detail` | `global.db` -> `ME2M` | Preserves row order; extracts vendor details; replaces `ME2M` table safely | **Fully Connected** (Invoked by `main.py`) |
@@ -203,9 +203,9 @@ Default URL: `http://127.0.0.1:8000/`.
 * **Output:** Creates or overwrites `data/zpp7_breakdown.db`. Creates a dedicated SQLite table named after each `Material Ref Code` (e.g. `1SYN126019R001A`), storing `[Material Ref Code, MRC Description, Material Code, Material Description, Req]`, plus a `parser_metadata` table tracking run timestamp.
 
 #### 3.2.2 MB25 (Reservation / WBS Mapping)
-* **Identification:** Filename containing `"mb25"` in `data/raw/`.
-* **Parser Logic (`parsers/mb25_parser.py`):** Reads Excel workbooks via `pandas`. Dynamically identifies header row by searching the first 10 rows for columns containing "Material" and "WBS Element".
-* **Output:** Overwrites `global.db` table `wbs_element`. Canonical columns: `Material Ref Code`, `MRC Description`, `WBS Element`.
+* **Identification:** Case-insensitive filename token `"mb25"` in raw or project input folders; supported Excel suffixes are `.xls`, `.xlsx`, and `.xlsm`.
+* **Parser Logic (`parsers/mb25_parser.py`):** Reads Excel workbooks via `pandas`. Dynamically identifies header row by searching the first 50 rows for `Material` and `WBS Element`.
+* **Output:** Replaces `global.db` table `MB25`. Canonical columns: `Material Ref Code`, `WBS Element`; composite primary key is `(Material Ref Code, WBS Element)`.
 
 #### 3.2.3 MB52 (Warehouse Stock / Storage Location)
 * **Identification:** Filename containing `"mb52"` or `"IN_MM_INNR_MB52"` in `data/raw/`.
@@ -325,7 +325,7 @@ None of these databases use Django ORM models (`shortage/models.py` does not exi
 | `affected_projects` | TEXT | YES | NULL | Comma-separated list of affected project IDs |
 
 #### 4.2.4 `data/global.db` Tables
-1. **`wbs_element` (832 rows):** `Material Ref Code` (TEXT), `MRC Description` (TEXT), `WBS Element` (TEXT). Keyed by Material Ref Code to map BOMs to WBS elements.
+1. **`MB25`:** `Material Ref Code` (TEXT), `WBS Element` (TEXT). Composite primary key maps material references to WBS elements.
 2. **`Storage` (832 rows):** `Material Code` (TEXT), `Material Description` (TEXT), `Unrestricted` (TEXT), `WBS Element` (TEXT). Contains plant and project inventory.
 3. **`PR` (91 rows):** `Material Code` (TEXT), `Description` (TEXT), `PR Quantity` (REAL), `WBS Element` (TEXT). Unfulfilled purchase requisitions.
 4. **`scopelist` (84,511 rows):** `Material Code` (TEXT), `Description` (TEXT), `Scope` (TEXT). Master list defining whether an item is ABB scope or Vendor Scope.
@@ -358,10 +358,10 @@ None of these databases use Django ORM models (`shortage/models.py` does not exi
 
 #### Group 2: Project and WBS Handling
 * **BR-WBS-01 [Verified Implemented]:** BOM to WBS Association.
-  * *Description:* Components in ZPP7 inherit their WBS Element by mapping ZPP7 `Material Ref Code` against `global.db.wbs_element`. If a Material Ref Code has no entry in `wbs_element`, all its BOM components are skipped.
+  * *Description:* Components in ZPP7 inherit their WBS Element by mapping ZPP7 `Material Ref Code` against `global.db.MB25`. If a Material Ref Code has no entry in `MB25`, all its BOM components are skipped.
   * *Code:* `services/shortage_service.py:build_rows()`, lines 361–366.
 * **BR-WBS-02 [Verified Implemented]:** One-to-Many Ref Code to WBS Fan-Out.
-  * *Description:* If one Material Ref Code maps to multiple WBS elements in `wbs_element`, the BOM requirements are duplicated across all associated WBS elements.
+  * *Description:* If one Material Ref Code maps to multiple WBS elements in `MB25`, the BOM requirements are duplicated across all associated WBS elements.
   * *Code:* `services/shortage_service.py:build_rows()`, lines 365–372.
 
 #### Group 3: Requirement Quantity Calculation
@@ -513,7 +513,7 @@ The `/shortages/` page provides the primary operational view for procurement and
 ### 8.2 Sidebar Filtering Mechanics
 Four dynamic filters are provided in the sidebar:
 1. **Material Ref Code (`material_ref_code`):** Top-level sub-assembly filter populated from distinct values in `net_shortage`.
-2. **WBS Element (`wbs_element`):** Filters rows by specific Work Breakdown Structure element.
+2. **WBS Element (`MB25`):** Filters rows by specific Work Breakdown Structure element.
 3. **Material Code (`material_code`):** Dropdown and search box targeting specific SAP material numbers.
 4. **Scope (`scope`):** Filter by `ABB` vs. `VENDOR SCOPE`.
 
@@ -667,7 +667,7 @@ flowchart TD
 flowchart TD
     A[Start Shortage Calculation] --> B[Read ZPP7 Breakdown from zpp7_breakdown.db]
     B --> C[Filter Materials: Must exist in scopelist with Scope = 'ABB' or 'VENDOR SCOPE']
-    C --> D[Lookup WBS Element via wbs_element table using Material Ref Code]
+    C --> D[Lookup WBS Element via MB25 table using Material Ref Code]
     D --> E[Aggregate BOM Requirements per Ref + WBS + Material]
     E --> F[Read MB52 Storage from global.db]
     F --> G[Extract Project Stock: WBS Element + Material Code]
@@ -1092,7 +1092,7 @@ The table below catalogs the exact source files, lines, and database entities in
 | **Scope List Parser** | `parsers/scopelist_parser.py` | `extract_scope_list`, `write_scope_list` | Source Inspection |
 | **Parser Orchestrator** | `parsers/__init__.py` | `run_parser`, `run_all_parsers` | Source Inspection |
 | **Batch Runner** | `main.py` | `main` | Source Inspection |
-| **Global Master Database** | `data/global.db` | Tables: `wbs_element`, `Storage`, `PR`, `scopelist`, `ME2J`, `ME2M` | SQLite Schema & Row Inspection |
+| **Global Master Database** | `data/global.db` | Tables: `MB25`, `Storage`, `PR`, `scopelist`, `ME2J`, `ME2M` | SQLite Schema & Row Inspection |
 | **ZPP7 Breakdown Database** | `data/zpp7_breakdown.db` | Tables: `parser_metadata`, `1SYN126019R001A` (and sister ref tables) | SQLite Schema & Row Inspection |
 | **Services Database** | `data/services.db` | Tables: `net_shortage` (8,168 rows), `vendor_track` (3,184 rows), `import_history` | SQLite Schema & Row Inspection |
 | **Django Test Client Suite**| `tests/test_django_app.py` | `LocalDjangoPagesTests` | Automated Test Execution (11/11 Passed) |

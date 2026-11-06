@@ -5,7 +5,17 @@ def is_zpp7(path: Path) -> bool:
     return "zpp7" in path.name.casefold()
 
 def is_mb25(path: Path) -> bool:
-    return "mb25" in path.name.casefold()
+    if "mb25" in path.stem.casefold():
+        return True
+    if path.suffix.casefold() not in {".xls", ".xlsx", ".xlsm"}:
+        return False
+    try:
+        from parsers.mb25_parser import extract_mb25
+
+        frame = extract_mb25(path)
+        return not frame.empty and frame["Material Ref Code"].str.upper().str.startswith("1SYN").any()
+    except Exception:
+        return False
 
 def is_mb52(path: Path) -> bool:
     return "mb52" in path.name.casefold()

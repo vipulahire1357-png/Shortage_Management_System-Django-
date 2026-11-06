@@ -3,7 +3,7 @@ import argparse
 import logging
 
 from parsers import available_parsers, run_parser
-from services.shortage_service import main as run_shortage_service
+from services.net_shortage import main as run_shortage_service
 from services.vendortrack_service import main as run_vendortrack_service
 from services.vendortrack_service import refresh_vendor_track_for_project
 

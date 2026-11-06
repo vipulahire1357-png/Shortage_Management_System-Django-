@@ -40,7 +40,7 @@ SAP exports (7 report types)
         |
    +----+--------------------------------------------+
    |  parsers/ (one per report)                      |
-   |  mb25_parser    -->  global.db / wbs_element    |
+   |  mb25_parser    -->  global.db / MB25    |
    |  mb52_parser    -->  global.db / Storage        |
    |  me2j_parser    -->  global.db / ME2J           |
    |  me2m_parser   -->  global.db / ME2M          |
@@ -64,7 +64,7 @@ All seven report parsers must run successfully before the shortage service execu
 
 | Step | Parser / Service | Output DB | Output Table | Mandatory |
 |------|-----------------|-----------|--------------|-----------|
-| 1 | `mb25_parser` | `global.db` | `wbs_element` | Yes |
+| 1 | `mb25_parser` | `global.db` | `MB25` | Yes |
 | 2 | `mb52_parser` | `global.db` | `Storage` | Yes |
 | 3 | `me2j_parser` | `global.db` | `ME2J` | Yes |
 | 4 | `me2m_parser` | `global.db` | `ME2M` | Yes |
@@ -236,7 +236,7 @@ MB25 maps each Material Reference Code (MRC) to its WBS Element. This mapping is
 
 ```python
 # parsers/mb25_parser.py  find_mb25_file()
-"mb25" in path.name.lower()          # full filename incl. extension
+"mb25" in path.stem.casefold()       # optional report token; workbook headers are fallback
 extensions = {".xlsx", ".xls", ".xlsm"}
 ```
 
@@ -248,14 +248,13 @@ Observed file: `MB25.XLSX` (12 KB)
 
 ### 5.4 Header Detection
 
-Scans first 50 rows of each sheet. A row is the header if it contains all three required columns (any accepted alias). No sheet-name constraint.
+Scans first 50 rows of each sheet. A row is the header if it contains both required columns (any accepted alias). No sheet-name constraint.
 
 ### 5.5 Column Aliases
 
 | Canonical | Accepted Aliases (normalized) |
 |-----------|-------------------------------|
 | Material | `material`, `material number`, `material no`, `material code` |
-| Material Description | `material description`, `material short text`, `short text`, `description` |
 | WBS Element | `wbs element`, `wbs`, `work breakdown structure element`, `work breakdown structure` |
 
 **Normalization:** lowercase → collapse `[\s_\-]+` to space → remove non-alphanumeric.
@@ -265,27 +264,25 @@ Scans first 50 rows of each sheet. A row is the header if it contains all three 
 | Source Column | DB Column | Notes |
 |--------------|-----------|-------|
 | Material (any alias) | `Material Ref Code` | This is the MRC, NOT a component code |
-| Material Description | `MRC Description` | Panel/assembly name |
 | WBS Element | `WBS Element` | e.g., `IN-10026019.A.1` |
 
-### 5.7 Destination: `global.db` / `wbs_element`
+### 5.7 Destination: `global.db` / `MB25`
 
 ```sql
-CREATE TABLE wbs_element (
-    "Material Ref Code" TEXT,
-    "MRC Description"   TEXT,
-    "WBS Element"       TEXT
+CREATE TABLE MB25 (
+    "Material Ref Code" TEXT NOT NULL,
+    "WBS Element" TEXT NOT NULL,
+    PRIMARY KEY ("Material Ref Code", "WBS Element")
 );
 ```
 
-Refresh: DELETE + INSERT. Row count: 4 (live). Other tables untouched.
+Refresh: transactional replacement; legacy `wbs_element` table is removed. Other tables untouched.
 
 ### 5.8 Column Specification
 
 | Source | DB Column | Required | Type | Example | Notes |
 |--------|-----------|----------|------|---------|-------|
 | Material | Material Ref Code | Yes | TEXT | `1SYN126019R001A` | MRC not component |
-| Material Description | MRC Description | No | TEXT | `0084SWG0001(MAIN LV SWGR)` | |
 | WBS Element | WBS Element | Yes | TEXT | `IN-10026019.A.1` | |
 
 ---
@@ -616,15 +613,15 @@ Refresh: DELETE + INSERT. Row count: ~84,511 (live).
 
 Each parser refreshes only its own table.
 
-#### `wbs_element` (from MB25)
+#### `MB25` (from MB25)
 ```sql
-CREATE TABLE wbs_element (
-    "Material Ref Code" TEXT,  -- MRC id, e.g. 1SYN126019R001A
-    "MRC Description"   TEXT,  -- Assembly name
-    "WBS Element"       TEXT   -- e.g. IN-10026019.A.1
+CREATE TABLE MB25 (
+    "Material Ref Code" TEXT NOT NULL,
+    "WBS Element" TEXT NOT NULL,
+    PRIMARY KEY ("Material Ref Code", "WBS Element")
 );
 ```
-Live: 4 rows | Refresh: DELETE + INSERT
+Live: generated from the current MB25 report | Refresh: transactional replacement
 
 #### `Storage` (from MB52)
 ```sql
@@ -725,7 +722,7 @@ Live: ~4,084 rows | Refresh: atomic rename via `_netshortage_table_new`
 | DB Column | Template Field |
 |-----------|-----------|
 | Material Ref Code | material_ref_code |
-| WBS Element | wbs_element |
+| WBS Element | MB25 |
 | Material Code | material_code |
 | Material Description | material_description |
 | ZPP7 Quantity | zpp7_quantity |
@@ -771,7 +768,7 @@ This matches the stated business rule.
 Before computing shortage, the service filters:
 
 1. **Scope filter:** Material must be in `scopelist` with Scope = `ABB` or `Vendor Scope`.
-2. **WBS filter:** MRC must have at least one WBS Element in `wbs_element`.
+2. **WBS filter:** MRC must have at least one WBS Element in `MB25`.
 
 Materials failing either filter are **excluded** from `net_shortage`.
 
@@ -839,7 +836,7 @@ The Django form validates the selected report type and supported extension, reje
 | Required table missing | `RuntimeError("Required table '{name}' was not found...")` |
 | Required column missing | `RuntimeError("Table '{name}' is missing required columns: ...")` |
 | Non-numeric quantity in source | `ValueError("Non-numeric quantity {v!r} encountered in {context}.")` |
-| No rows qualify for net_shortage | `RuntimeError("No rows qualified for net_shortage. Check ZPP7 MRC matches wbs_element and scopelist Scope values contain 'ABB' or 'Vendor Scope'.")` |
+| No rows qualify for net_shortage | `RuntimeError("No rows qualified for net_shortage. Check ZPP7 MRC matches MB25 and scopelist Scope values contain 'ABB' or 'Vendor Scope'.")` |
 
 ### 13.7 Blank and Duplicate Row Handling
 

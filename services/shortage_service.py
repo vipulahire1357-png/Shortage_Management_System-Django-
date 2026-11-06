@@ -3,7 +3,7 @@ Build the ABB net-shortage table from the existing report databases.
 
 Inputs:
     data/global.db
-        - wbs_element
+        - MB25
         - scopelist
         - Storage
         - ME2J
@@ -281,7 +281,7 @@ def read_zpp7_rows(db_path: Path) -> list[dict[str, Any]]:
     if not db_path.is_file():
         raise FileNotFoundError(f"ZPP7 database not found: {db_path}")
 
-    required = ["Material Ref Code", "Material Code", "Material Description", "Req"]
+    required = ["Material Ref Code", "Material Code"]
     extracted: list[dict[str, Any]] = []
 
     with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
@@ -295,8 +295,11 @@ def read_zpp7_rows(db_path: Path) -> list[dict[str, Any]]:
             available = table_columns(conn, table_name)
             if not all(column.casefold() in available for column in required):
                 continue
-
-            rows = read_table(conn, table_name, required)
+            description_col = next((c for c in ("Description", "Material Description") if c.casefold() in available), None)
+            quantity_col = next((c for c in ("ZPP7 Quantity", "Req") if c.casefold() in available), None)
+            if not description_col or not quantity_col:
+                continue
+            rows = read_table(conn, table_name, [*required, description_col, quantity_col])
             for row in rows:
                 ref_code = clean_text(row["Material Ref Code"])
                 material_code = clean_text(row["Material Code"])
@@ -306,9 +309,9 @@ def read_zpp7_rows(db_path: Path) -> list[dict[str, Any]]:
                 extracted.append({
                     "Material Ref Code": ref_code,
                     "Material Code": material_code,
-                    "Material Description": clean_text(row["Material Description"]),
+                    "Material Description": clean_text(row[description_col]),
                     "Req Quantity": to_number(
-                        row["Req"],
+                        row[quantity_col],
                         context=f"ZPP7 table {table_name!r}, material {material_code!r}",
                     ),
                 })
@@ -329,7 +332,7 @@ def build_rows(
         raise FileNotFoundError(f"Global database not found: {global_db_path}")
 
     with closing(sqlite3.connect(global_db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
-        wbs_table = resolve_table(conn, "wbs_element")
+        wbs_table = resolve_table(conn, "MB25")
         scope_table = resolve_table(conn, "scopelist")
         storage_table = resolve_table(conn, "Storage")
         me2j_table = resolve_table(conn, "ME2J")
@@ -500,7 +503,7 @@ def build_rows(
     if not output:
         raise RuntimeError(
             "No rows qualified for net_shortage. Check that ZPP7 Material "
-            "Ref Codes match wbs_element and that scopelist Scope values "
+            "Ref Codes match MB25 and that scopelist Scope values "
             "contain 'ABB' or 'Vendor Scope'."
         )
     return output

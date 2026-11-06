@@ -36,7 +36,7 @@ If your Python installation uses a different version, replace `3.12` with that i
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 cp .env.example .env
