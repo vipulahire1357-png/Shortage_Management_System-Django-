@@ -48,22 +48,35 @@ def normalize_header(value):
 
 
 def find_report():
-    """Find a named ME2J workbook or recognize a generically named report."""
-    roots = [RAW_DIR, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
-    files = sorted({
-        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() in SUPPORTED_EXTENSIONS
-        and not path.name.startswith("~$")
-    })
-    candidates = [path for path in files if "me2j" in path.stem.casefold()]
-    if not candidates:
-        for path in files:
-            try:
-                load_me2j(path)
-                candidates.append(path)
-            except Exception:
-                continue
+    """Find a named ME2J workbook or recognize a generically named report.
+
+    Prioritises ``data/raw/`` so that when reports are staged there the
+    parser does not also pick up originals in ``projects/`` or ``global/``.
+    """
+    all_roots = [RAW_DIR, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
+
+    def _gather(roots):
+        return sorted({
+            path.resolve() for root in roots if root.exists()
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in SUPPORTED_EXTENSIONS
+            and not path.name.startswith("~$")
+        })
+
+    # Search RAW_DIR first; only fall back to projects/global when nothing found
+    for roots in ([RAW_DIR], all_roots):
+        files = _gather(roots)
+        candidates = [path for path in files if "me2j" in path.stem.casefold()]
+        if not candidates:
+            for path in files:
+                try:
+                    load_me2j(path)
+                    candidates.append(path)
+                except Exception:
+                    continue
+        if candidates:
+            break
 
     if not candidates:
         raise FileNotFoundError(

@@ -65,23 +65,36 @@ def find_scope_column(columns):
 
 
 def find_input_file(raw_dir: Path) -> Path:
-    """Find a named scope workbook or identify a generic filename by headers."""
-    roots = [raw_dir, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
+    """Find a named scope workbook or identify a generic filename by headers.
+
+    Prioritises ``data/raw/`` so that when reports are staged there the
+    parser does not also pick up originals in ``projects/`` or ``global/``.
+    """
+    all_roots = [raw_dir, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
     extensions = {".xlsx", ".xls", ".xlsm"}
-    files = sorted({
-        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() in extensions
-        and not path.name.startswith("~$")
-    })
-    candidates = [path for path in files if "material_scope_list" in path.stem.casefold()]
-    if not candidates:
-        for path in files:
-            try:
-                extract_scope_list(path)
-                candidates.append(path)
-            except Exception:
-                continue
+
+    def _gather(roots):
+        return sorted({
+            path.resolve() for root in roots if root.exists()
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in extensions
+            and not path.name.startswith("~$")
+        })
+
+    # Search raw_dir first; only fall back to projects/global when nothing found
+    for roots in ([raw_dir], all_roots):
+        files = _gather(roots)
+        candidates = [path for path in files if "material_scope_list" in path.stem.casefold()]
+        if not candidates:
+            for path in files:
+                try:
+                    extract_scope_list(path)
+                    candidates.append(path)
+                except Exception:
+                    continue
+        if candidates:
+            break
 
     if not candidates:
         raise FileNotFoundError(

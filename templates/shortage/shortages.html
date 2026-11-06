@@ -17,7 +17,7 @@
     <form method="get" class="project-select-form">
       <label for="shortage-project" class="form-label">Project
         <select id="shortage-project" name="project_id">
-          <option value="" {% if not selected_project %}selected{% endif %}>All Projects</option>
+          <option value="" {% if not selected_project %}selected{% endif %}>Select a project</option>
           {% for project in projects %}<option value="{{ project }}" {% if selected_project == project %}selected{% endif %}>{{ project }}</option>{% endfor %}
         </select>
       </label>

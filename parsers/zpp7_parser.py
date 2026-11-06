@@ -20,15 +20,27 @@ BOM_DESC_IDX = 6
 
 
 def find_zpp7_file(raw_dir: Path = RAW_DIR) -> Path:
-    """Find a ZPP7 report regardless of capitalization, suffix, or subfolder."""
-    roots = [raw_dir, PROJECT_ROOT / "projects"]
-    matches = sorted({
-        p.resolve() for root in roots if root.exists()
-        for p in root.rglob("*")
-        if p.is_file() and "zpp7" in p.stem.casefold()
-        and p.suffix.casefold() in {".xls", ".xlsx", ".xlsm", ".txt", ".tsv", ".csv"}
-        and not p.name.startswith("~$")
-    })
+    """Find a ZPP7 report regardless of capitalization, suffix, or subfolder.
+
+    Prioritises ``data/raw/`` so that when reports are staged there the
+    parser does not also pick up originals in ``projects/``.
+    """
+    all_roots = [raw_dir, PROJECT_ROOT / "projects"]
+
+    def _gather(roots):
+        return sorted({
+            p.resolve() for root in roots if root.exists()
+            for p in root.rglob("*")
+            if p.is_file() and "zpp7" in p.stem.casefold()
+            and p.suffix.casefold() in {".xls", ".xlsx", ".xlsm", ".txt", ".tsv", ".csv"}
+            and not p.name.startswith("~$")
+        })
+
+    # Search raw_dir first; only fall back to projects/ when nothing found
+    matches = _gather([raw_dir])
+    if not matches:
+        matches = _gather(all_roots)
+
     if not matches:
         raise FileNotFoundError(
             f"No filename containing 'ZPP7' found in {raw_dir}. "

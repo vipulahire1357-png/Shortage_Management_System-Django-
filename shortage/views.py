@@ -6,9 +6,6 @@ import io
 import os
 import re
 import shutil
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -113,20 +110,27 @@ def _shortage_query(request, project_id=None):
     conn = _conn()
     if conn is None:
         return [], 0, {key: [] for key in ("material_ref_code", "wbs_element", "material_code", "scope")}, {}
+    # The register is project-scoped. Showing the unfiltered database here
+    # made the page look like it was displaying an old register (and mixed
+    # together records from every processed project) before a project was
+    # selected. The page already asks the user to select a project first.
+    if project_id is None:
+        project_id = request.GET.get("project_id", "").strip()
+    if not project_id or not SAFE_ID.fullmatch(project_id):
+        conn.close()
+        return [], 0, {key: [] for key in ("material_ref_code", "wbs_element", "material_code", "scope")}, {}
     try:
         table = _output_table(conn)
         if table is None:
             return [], 0, {key: [] for key in ("material_ref_code", "wbs_element", "material_code", "scope")}, {}
-        project_id = request.GET.get("project_id", "").strip() if project_id is None else project_id
         clauses, values = [], []
-        if project_id and SAFE_ID.fullmatch(project_id):
-            clauses.append('"project_id" = ?')
-            values.append(project_id)
+        clauses.append('"project_id" = ?')
+        values.append(project_id)
         filters = {}
         for field in ("material_ref_code", "wbs_element", "material_code", "scope"):
             col = f'"{API_TO_DB[field]}"'
-            project_clause = '"project_id" = ? AND ' if project_id and SAFE_ID.fullmatch(project_id) else ""
-            project_values = [project_id] if project_clause else []
+            project_clause = '"project_id" = ? AND '
+            project_values = [project_id]
             filters[field] = [r[0] for r in conn.execute(
                 f"SELECT DISTINCT {col} FROM {table} WHERE {project_clause}"
                 f"TRIM(COALESCE({col},''))<>'' ORDER BY {col}", project_values
@@ -291,62 +295,39 @@ def upload_project_report(request, project_id):
 
 @require_POST
 def process_project(request, project_id):
-    project_id = _safe_id(project_id)
-    project_dir = _project_path(project_id)
-    proj = _find_reports(project_dir, REPORT_ORDER)
-    shared = _find_reports(settings.GLOBAL_DIR, GLOBAL_ORDER)
-    missing = [k for k, v in {**proj, **shared}.items() if not v]
-    if missing:
-        from django.contrib import messages
-        messages.error(request, "Missing required reports: " + ", ".join(missing))
-        return redirect("input")
-    settings.RAW_DIR.mkdir(parents=True, exist_ok=True)
-    staged = {**proj, **shared}
-    known_stems = {item["stem"].casefold() for item in REPORTS.values()}
-    with tempfile.TemporaryDirectory(prefix="abb-raw-backup-") as backup_dir:
-        backups = {}
-        for existing in settings.RAW_DIR.iterdir():
-            if existing.is_file() and (existing.stem.casefold() in known_stems or "me2m" in existing.stem.casefold()):
-                saved = Path(backup_dir) / existing.name
-                shutil.copy2(existing, saved)
-                backups[existing.name] = saved
-        try:
-            for existing in settings.RAW_DIR.iterdir():
-                if existing.is_file() and (existing.stem.casefold() in known_stems or "me2m" in existing.stem.casefold()):
-                    existing.unlink()
-            for key, source in staged.items():
-                shutil.copy2(source, settings.RAW_DIR / f"{REPORTS[key]['stem']}{source.suffix}")
-            from services.lock import processing_lock
-            with processing_lock(project_id):
-                child_env = os.environ.copy()
-                child_env.update({
-                    "ABB_DATA_ROOT": str(settings.DATA_ROOT),
-                    "ABB_RAW_DIR": str(settings.RAW_DIR),
-                    "ABB_GLOBAL_DB": str(settings.GLOBAL_DB),
-                    "ABB_ZPP7_DB": str(settings.ZPP7_DB),
-                    "ABB_SERVICES_DB": str(settings.SERVICES_DB),
-                    "SHORTAGE_REGISTERS_DIR": str(settings.SHORTAGE_REGISTERS_DIR),
-                    "VENDOR_REGISTERS_DIR": str(settings.VENDOR_REGISTERS_DIR),
-                })
-                result = subprocess.run([sys.executable, "main.py", "--report", "all", "--project-id", project_id], cwd=settings.BASE_DIR, capture_output=True, text=True, timeout=600, env=child_env)
-        except Exception as exc:
-            from django.contrib import messages
-            messages.error(request, str(exc))
-            return redirect("input")
-        finally:
-            for candidate in settings.RAW_DIR.iterdir():
-                if candidate.is_file() and (candidate.stem.casefold() in known_stems or "me2m" in candidate.stem.casefold()):
-                    candidate.unlink()
-            for name, saved in backups.items():
-                shutil.copy2(saved, settings.RAW_DIR / name)
     from django.contrib import messages
-    if result.returncode:
-        messages.error(request, (result.stdout + "\n" + result.stderr)[-6000:])
+    from services.report_pipeline import process_project_reports
+
+    project_id = _safe_id(project_id)
+
+    result = process_project_reports(
+        project_id,
+        projects_dir=settings.PROJECTS_DIR,
+        global_dir=settings.GLOBAL_DIR,
+        raw_dir=settings.RAW_DIR,
+        db_path=settings.SERVICES_DB,
+        registers_dir=settings.SHORTAGE_REGISTERS_DIR,
+    )
+
+    if result.success:
+        rows = result.shortage_result.get("rows_written", 0)
+        msg = f"Project {project_id} processed successfully: {rows} shortage records"
+        if result.export_success:
+            msg += f", register exported to {result.export_result.get('filename', 'file')}"
+        elif result.export_result.get("error"):
+            msg += f". Register export warning: {result.export_result['error']}"
+        msg += "."
+        messages.success(request, msg)
     else:
-        from services.shortage_export import export_material_shortage_register
-        export_material_shortage_register(project_id, db_path=settings.SERVICES_DB, output_dir=settings.SHORTAGE_REGISTERS_DIR)
-        messages.success(request, f"Project {project_id} processed and its shortage register was updated.")
-    return redirect("shortages")
+        messages.error(request, result.error or "Processing failed with an unknown error.")
+
+    if result.restoration_errors:
+        messages.warning(
+            request,
+            "Staging restoration had issues: " + "; ".join(result.restoration_errors),
+        )
+
+    return redirect(f"{reverse('shortages')}?{urlencode({'project_id': project_id})}")
 
 
 @require_POST

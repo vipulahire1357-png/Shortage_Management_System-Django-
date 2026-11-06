@@ -58,28 +58,41 @@ def normalize_header(value) -> str:
 
 
 def find_report() -> Path:
-    """Find a named PR report or identify a generic filename by its headers."""
-    roots = [RAW_DIR, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
+    """Find a named PR report or identify a generic filename by its headers.
+
+    Prioritises ``data/raw/`` so that when reports are staged there the
+    parser does not also pick up originals in ``projects/`` or ``global/``.
+    """
+    all_roots = [RAW_DIR, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
     extensions = {".xls", ".xlsx", ".xlsm", ".txt", ".tsv", ".csv"}
-    files = sorted({
-        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() in extensions
-        and not path.name.startswith("~$")
-    })
-    candidates = [
-        path for path in files
-        if path.stem.strip().casefold() in {"pr", "pr 1", "purchase requisition"}
-        or path.stem.strip().casefold().startswith("pr ")
-        or "purchase requisition" in path.stem.casefold()
-    ]
-    if not candidates:
-        for path in files:
-            try:
-                load_pr_report(path)
-                candidates.append(path)
-            except Exception:
-                continue
+
+    def _gather(roots):
+        return sorted({
+            path.resolve() for root in roots if root.exists()
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in extensions
+            and not path.name.startswith("~$")
+        })
+
+    # Search RAW_DIR first; only fall back to projects/global when nothing found
+    for roots in ([RAW_DIR], all_roots):
+        files = _gather(roots)
+        candidates = [
+            path for path in files
+            if path.stem.strip().casefold() in {"pr", "pr 1", "purchase requisition"}
+            or path.stem.strip().casefold().startswith("pr ")
+            or "purchase requisition" in path.stem.casefold()
+        ]
+        if not candidates:
+            for path in files:
+                try:
+                    load_pr_report(path)
+                    candidates.append(path)
+                except Exception:
+                    continue
+        if candidates:
+            break
 
     if not candidates:
         raise FileNotFoundError(

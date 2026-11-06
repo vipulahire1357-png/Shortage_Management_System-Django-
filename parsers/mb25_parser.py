@@ -42,31 +42,45 @@ def normalize_header(value) -> str:
 
 
 def find_mb25_file(raw_dir: Path) -> Path:
-    """Find one MB25 workbook independent of case and project subfolder."""
-    roots = [raw_dir, PROJECT_ROOT / "projects"]
-    if not any(root.exists() for root in roots):
+    """Find one MB25 workbook independent of case and project subfolder.
+
+    Prioritises ``data/raw/`` so that when reports are staged there the
+    parser does not also pick up originals in ``projects/``.
+    """
+    all_roots = [raw_dir, PROJECT_ROOT / "projects"]
+    if not any(root.exists() for root in all_roots):
         raise FileNotFoundError(
             f"No raw or project input folder found for MB25: {raw_dir}"
         )
 
     extensions = {".xlsx", ".xls", ".xlsm"}
-    files = sorted(
-        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() in extensions
-        and not path.name.startswith("~$")
-    )
-    candidates = [path for path in files if "mb25" in path.stem.casefold()]
-    if not candidates:
-        # SAP exports are often renamed during download. Identify an MB25 by
-        # its Material/WBS header and reference-code data when the filename is generic.
-        for path in files:
-            try:
-                frame = extract_mb25(path)
-                if not frame.empty and frame["Material Ref Code"].str.upper().str.startswith("1SYN").any():
-                    candidates.append(path)
-            except Exception:
-                continue
+
+    def _gather(roots):
+        return sorted(
+            path.resolve() for root in roots if root.exists()
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in extensions
+            and not path.name.startswith("~$")
+        )
+
+    # Search raw_dir first; only fall back to projects/ when nothing found
+    for roots in ([raw_dir], all_roots):
+        files = _gather(roots)
+        candidates = [path for path in files if "mb25" in path.stem.casefold()]
+        if not candidates:
+            # SAP exports are often renamed during download. Identify an MB25 by
+            # its Material/WBS header and reference-code data when the filename is generic.
+            for path in files:
+                try:
+                    frame = extract_mb25(path)
+                    if not frame.empty and frame["Material Ref Code"].str.upper().str.startswith("1SYN").any():
+                        candidates.append(path)
+                except Exception:
+                    continue
+        if candidates:
+            break
+
     if not candidates:
         raise FileNotFoundError(
             f"No Excel filename containing 'MB25' found under {raw_dir} or {PROJECT_ROOT / 'projects'}"

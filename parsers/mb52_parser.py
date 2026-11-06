@@ -50,24 +50,38 @@ def clean_cell(value):
 
 
 def find_report_file(raw_dir: Path) -> Path:
-    """Find a named MB52 report or identify a generically named report by headers."""
-    roots = [raw_dir, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
+    """Find a named MB52 report or identify a generically named report by headers.
+
+    Prioritises ``data/raw/`` so that when reports are staged there the
+    parser does not also pick up originals in ``projects/`` or ``global/``.
+    """
+    all_roots = [raw_dir, PROJECT_ROOT / "projects", PROJECT_ROOT / "global"]
     extensions = {".htm", ".html", ".xlsx", ".xls", ".xlsm"}
-    files = sorted({
-        path.resolve() for root in roots if root.exists() for path in root.rglob("*")
-        if path.is_file() and path.suffix.casefold() in extensions
-        and not path.name.startswith("~$")
-    })
-    candidates = [p for p in files if "in_mm_innr_mb52" in p.stem.casefold()]
-    if not candidates:
-        candidates = [p for p in files if "mb52" in p.stem.casefold()]
-    if not candidates:
-        for path in files:
-            try:
-                extract_mb52(path)
-                candidates.append(path)
-            except Exception:
-                continue
+
+    def _gather(roots):
+        return sorted({
+            path.resolve() for root in roots if root.exists()
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.casefold() in extensions
+            and not path.name.startswith("~$")
+        })
+
+    # Search raw_dir first; only fall back to projects/global when nothing found
+    for roots in ([raw_dir], all_roots):
+        files = _gather(roots)
+        candidates = [p for p in files if "in_mm_innr_mb52" in p.stem.casefold()]
+        if not candidates:
+            candidates = [p for p in files if "mb52" in p.stem.casefold()]
+        if not candidates:
+            for path in files:
+                try:
+                    extract_mb52(path)
+                    candidates.append(path)
+                except Exception:
+                    continue
+        if candidates:
+            break
+
     if not candidates:
         raise FileNotFoundError(
             f"No MB52 HTML or Excel report found under {raw_dir} or project/global inputs."
